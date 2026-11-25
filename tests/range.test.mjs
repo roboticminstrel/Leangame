@@ -344,7 +344,8 @@ test('live board: Rules mode, the tray holds just 0 in ℝ and 0 in 𝑉, and th
   assert.equal(c.state.rules, true);
   assert.deepEqual(c.state.pieces.map(p => p.id), ['PZS', 'PZ']);
   const v = c.renderVals();
-  assert.equal(v.vecs.length + v.hexes.length, 2 + 3 + 2, 'two vectors, three scalars, and the two tray zeros');
+  assert.equal(v.vecs.length + v.hexes.length, 2 + 3, 'two vectors and three scalars: the tray is a popup, not on the board');
+  assert.equal(v.tray.open, false, 'the tray starts closed');
   assert.equal(v.parenSrc, null);
   assert.deepEqual(readout(c), ['(2 + 3)𝑣 + −1𝑣']);
 });
@@ -480,4 +481,26 @@ test('absorbing the 0 out of a two-term bracket drops the bracket: ½·(𝑣 + 0
   c.setState({ tops: [{ node: c.mkProd([c.mkS('R', '½', '½')], S), x: 24, y: 200 }] });
   dragTo(c, z.id, ...centre(c, v.id));
   assert.deepEqual(readout(c), ['½𝑣']);
+});
+
+test('tray popup: opens with two tabs; a 0 dragged out of it lands on the board, and the popup hides during the drag', () => {
+  const c = makeLive();
+  let v = c.renderVals();
+  v.tray.toggle(); v = c.renderVals();
+  assert.equal(v.tray.show, true); assert.equal(v.tray.tab, 'tray');
+  v.tray.pick('lean')(); assert.equal(c.renderVals().tray.tab, 'lean');
+  v.tray.pick('tray')(); v = c.renderVals();
+  // drag the blue 0 from the popup onto −1𝑣's 𝑣
+  const tile = v.tray.tiles.vec; const T1 = c.state.tops[1].node; const [tx, ty] = centre(c, T1.vec.id);
+  tile.down(ev(0, 0));
+  const pz = c.state.pieces.find(p => p.id === 'PZ');
+  const dx = tx - (pz.x + c.K.ZW / 2), dy = ty - (pz.y + 44);
+  c.pmove(ev(dx / 2, dy / 2)); v = c.renderVals();
+  assert.equal(v.tray.show, false, 'hidden while dragging');
+  assert.ok(v.vecs.some(t => t.el === '0'), 'the dragged 0 is drawn on the board');
+  c.pmove(ev(dx, dy)); c.renderVals();
+  c.pend(); v = c.renderVals();
+  assert.deepEqual(readout(c), ['(2 + 3)𝑣 + −1𝑣 + 0']);
+  assert.equal(v.tray.show, true, 'back after the drop');
+  v.tray.toggle(); assert.equal(c.renderVals().tray.open, false);
 });

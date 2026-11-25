@@ -44,7 +44,7 @@ export class LeanPlay extends Component {
     const dot = DOT[s.state] || '#94A3B8';
     const detail = s.state === 'ready' ? `asleep after ${Math.round((s.idle_limit || 600) / 60)} idle minutes` : s.detail || '';
     return html`
-<div style="position: absolute; left: 12px; bottom: 76px; max-width: calc(100% - 110px); z-index: 1000; font-family: Inter, system-ui, sans-serif">
+<div style="position: absolute; left: 12px; top: 12px; max-width: calc(100% - 24px); z-index: 1000; font-family: Inter, system-ui, sans-serif">
   <button onClick=${this.play} disabled=${!canPress} aria-live="polite"
     style=${`display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 8px 14px; border-radius: 22px; border: 1.5px solid rgba(203,213,225,0.45); background: rgba(27,37,58,0.94); color: #E2E8F0; font: inherit; font-size: 15px; font-weight: 600; text-align: left; cursor: ${canPress ? 'pointer' : 'default'}`}>
     <span aria-hidden="true" style=${`flex: 0 0 auto; width: 10px; height: 10px; border-radius: 5px; background: ${dot}; ${busy ? 'animation: leanPulse 1.2s ease-in-out infinite' : ''}`}></span>

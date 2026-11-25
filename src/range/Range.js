@@ -34,7 +34,7 @@ export class Range extends Component {
     if (!this.props.legacy) {
       // Rules mode only; the tray holds the two zeros (0 in ℝ, 0 in 𝑉), each an endless supply
       return Object.assign(base, {
-        rules: true,
+        rules: true, trayOpen: false, trayTab: 'tray',
         tops: [
           { node: this.mkProd([g], this.mkV('𝑉', '𝑣', 'v', 'R', 140)), x: 24, y: 164 },
           { node: this.mkProd([this.mkS('R', '−1', '-1')], this.mkV('𝑉', '𝑣', 'v', 'R', 140)), x: 214, y: 352 }
@@ -1118,7 +1118,62 @@ export class Range extends Component {
     this._ft = setTimeout(() => this.setState({ flash: null }), 2000);
   }
 
+  // The tray popup (overlay units: 560 wide, scaled like the board at zoom 1). Its tiles start a drag of the tray
+  // piece from where they sit on screen, converted to board coordinates; the popup hides while the drag lasts.
+  trayVals(zs, zp, zeroHex, zeroTile) {
+    const St = this.state;
+    const H = 230, bottom = 84; const top = (St.bh || 716) / this.fitScale() - bottom - H;
+    const at = (pc, x, y) => {
+      const down = e => {
+        if (e && e.preventDefault) e.preventDefault();
+        if (e && e.stopPropagation) e.stopPropagation();
+        const z = St.zoom; const wx = x / z - St.panX, wy = y / z - St.panY;
+        this.setState({ pieces: this.state.pieces.map(p => p.id === pc.id ? Object.assign({}, p, { x: wx, y: wy }) : p) });
+        this.pdrag = { id: pc.id, sx: e.clientX, sy: e.clientY, ox: wx, oy: wy, moved: false };
+      };
+      return { x: x - 16, y: y - top, down: down };
+    };
+    const hex = Object.assign({}, zeroHex, at(zs, 16 + 30, top + 92), { z: 1, scale: 1, shadow: 7 });
+    const vec = Object.assign({}, zeroTile, at(zp, 16 + 150, top + 92), { z: 1, scale: 1, shadow: 7 });
+    return {
+      open: !!St.trayOpen, show: !!St.trayOpen && !(this.pdrag && this.pdrag.moved), tab: St.trayTab || 'tray', top: top, h: H,
+      tiles: { hex: hex, vec: vec },
+      toggle: () => this.setState({ trayOpen: !this.state.trayOpen }),
+      pick: tab => () => this.setState({ trayTab: tab })
+    };
+  }
   /* ---------- render ---------- */
+  vecHtml(t) {
+    return html`
+      <button onPointerDown=${t.down} aria-label=${t.aria} style=${`position: absolute; left: ${t.x}px; top: ${t.y}px; width: ${t.w}px; height: 88px; padding: 0; border: none; background: transparent; touch-action: none; cursor: grab; z-index: ${t.z}; transform: scale(${t.scale}); filter: drop-shadow(0 ${t.shadow}px 12px rgba(0,0,0,0.40)); animation: ${t.anim}; --dx: ${t.dx}px; --dy: ${t.dy}px; font-family: inherit`}>
+        <span style="position: absolute; left: 0; top: 5px; width: 52px; height: 83px; display: block; clip-path: polygon(0 0, 30px 0, 52px 50%, 30px 100%, 0 100%, 22px 50%); background: #B7791F"></span>
+        <span style="position: absolute; left: 0; top: 0; width: 52px; height: 83px; display: block; clip-path: polygon(0 0, 30px 0, 52px 50%, 30px 100%, 0 100%, 22px 50%); background: #F1E7CD">
+          <span style="position: absolute; left: 0; top: 0; width: 52px; height: 30px; display: block; background: #C38F2A; box-shadow: inset 0 3px 6px rgba(60,38,0,0.60)"></span>
+          <span style="position: absolute; left: 8px; top: 0; width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; color: #5A420E; font-size: 17px; font-weight: 700">𝐅</span>
+        </span>
+        <span style="position: absolute; left: 0; top: 5px; width: 100%; height: 83px; display: block; clip-path: polygon(33px 0, calc(100% - 22px) 0, 100% 50%, calc(100% - 22px) 100%, 33px 100%, 55px 50%); background: ${t.lip}"></span>
+        <span style=${`position: absolute; left: 0; top: 0; width: 100%; height: 83px; display: block; clip-path: polygon(33px 0, calc(100% - 22px) 0, 100% 50%, calc(100% - 22px) 100%, 33px 100%, 55px 50%); background: ${t.face}`}>
+          <span style="position: absolute; left: 0; top: 0; right: 0; height: 30px; box-sizing: border-box; padding: 0 26px 0 60px; display: flex; align-items: center; justify-content: center; background: #2F5BD3; color: #FFFFFF; font-size: 15px; font-weight: 700; white-space: nowrap">${t.type}</span>
+          <span style=${`position: absolute; left: 0; top: 30px; right: 0; bottom: 0; box-sizing: border-box; padding: 0 26px 0 60px; display: flex; align-items: center; justify-content: center; font-size: ${t.elSize}px; color: ${t.fg}; white-space: nowrap`}>${t.el}</span>
+        </span>
+        ${t.hasField ? html`
+          <span onPointerDown=${t.pieceDown} style=${`position: absolute; left: 0; top: 0; width: 46px; height: 34px; display: block; transform: scale(${t.pieceScale})`}>
+            <span style="position: absolute; left: 0; top: 3px; width: 46px; height: 30px; display: block; clip-path: polygon(0 0, 30px 0, 45.9px 100%, 15.9px 100%); background: #B7791F"></span>
+            <span style=${`position: absolute; left: 0; top: 0; width: 46px; height: 30px; display: flex; align-items: center; justify-content: center; clip-path: polygon(0 0, 30px 0, 45.9px 100%, 15.9px 100%); background: ${t.pieceBg}; color: #2A1D04; font-size: 17px; font-weight: 700`}>${t.fLabel}</span>
+          </span>
+        ` : null}
+      </button>`;
+  }
+  hexHtml(t) {
+    return html`
+      <button onPointerDown=${t.down} aria-label=${t.aria} style=${`position: absolute; left: ${t.x}px; top: ${t.y}px; width: 96px; height: 88px; padding: 0; border: none; background: transparent; touch-action: none; cursor: grab; z-index: ${t.z}; transform: translateY(${t.sink}px) scale(${t.scale}); filter: drop-shadow(0 ${t.shadow}px 12px rgba(0,0,0,0.40)); animation: ${t.anim}; --dx: ${t.dx}px; --dy: ${t.dy}px; font-family: inherit`}>
+        <span style="position: absolute; left: 0; top: 5px; width: 100%; height: 83px; display: block; clip-path: polygon(22px 0, calc(100% - 22px) 0, 100% 50%, calc(100% - 22px) 100%, 22px 100%, 0 50%); background: ${t.lip}"></span>
+        <span style=${`position: absolute; left: 0; top: 0; width: 100%; height: 83px; display: flex; flex-direction: column; clip-path: polygon(22px 0, calc(100% - 22px) 0, 100% 50%, calc(100% - 22px) 100%, 22px 100%, 0 50%); background: ${t.face}`}>
+          <span style=${`height: 30px; display: flex; align-items: center; justify-content: center; background: ${t.band}; color: #2A1D04; font-size: 17px; font-weight: 700`}>${t.type}</span>
+          <span style=${`flex: 1 1 auto; display: flex; align-items: center; justify-content: center; font-size: ${t.elSize}px; color: ${t.fg}; white-space: nowrap`}>${t.el}</span>
+        </span>
+      </button>`;
+  }
   renderVals() {
     const St = this.state;
     this._ov = St.override;
@@ -1194,7 +1249,9 @@ export class Range extends Component {
       zoomIn: () => this.zoomAround(this.state.zoom * 1.25), zoomOut: () => this.zoomAround(this.state.zoom / 1.25),
       zoomReset: () => this.setState({ zoom: 1, panX: 0, panY: 0 }), showReset: Math.abs(St.zoom - 1) > 0.01 || St.panX !== 0 || St.panY !== 0, zoomPct: Math.round(St.zoom * 100),
       zoneL: zb.l, zoneW: zb.r - zb.l,
-      ghosts: ghosts, groups: R.groups, pluses: R.pluses, vecs: R.vecs.concat([zeroTile]), hexes: R.hexes.concat([zeroHex]), dots: R.dots, strips: strips,
+      ghosts: ghosts, groups: R.groups, pluses: R.pluses,
+      vecs: R.vecs.concat(this.props.legacy || zDrag ? [zeroTile] : []), hexes: R.hexes.concat(this.props.legacy || zsDrag ? [zeroHex] : []),
+      tray: this.props.legacy ? null : this.trayVals(zs, zp, zeroHex, zeroTile), dots: R.dots, strips: strips,
       parenSrc: ps ? { x: ps.x, y: ps.y, z: this.pdrag && this.pdrag.id === ps.id ? 990 : 5, op: rules ? 0.3 : 1, pe: rules ? 'none' : 'auto', down: this.pieceDown(ps) } : null,
       legacy: !!this.props.legacy, trayH: this.props.legacy ? 414 : 190,
       results: results, flashes: flashes,
@@ -1221,8 +1278,8 @@ export class Range extends Component {
 
     <div style=${`position: absolute; left: ${v.zoneL}px; top: 126px; width: ${v.zoneW}px; height: 400px; box-sizing: border-box; border-radius: 24px; border: 2px dashed rgba(148,163,184,0.28); pointer-events: none`}></div>
     <div style="position: absolute; left: 28px; top: 136px; font-family: Inter, system-ui, sans-serif; font-size: 14px; font-weight: 700; letter-spacing: 0.12em; color: #94A3B8; pointer-events: none">EXPRESSION</div>
-    <div style=${`position: absolute; left: 10px; top: 546px; width: 540px; height: ${v.trayH}px; box-sizing: border-box; border-radius: 24px; border: 2px dashed rgba(148,163,184,0.28); background: rgba(255,255,255,0.02); opacity: ${v.trayOp}; pointer-events: none`}></div>
-    <div style="position: absolute; left: 28px; top: 556px; font-family: Inter, system-ui, sans-serif; font-size: 14px; font-weight: 700; letter-spacing: 0.12em; color: #94A3B8; pointer-events: none">TRAY</div>
+    ${v.legacy ? html`<div style=${`position: absolute; left: 10px; top: 546px; width: 540px; height: ${v.trayH}px; box-sizing: border-box; border-radius: 24px; border: 2px dashed rgba(148,163,184,0.28); background: rgba(255,255,255,0.02); opacity: ${v.trayOp}; pointer-events: none`}></div>
+    <div style="position: absolute; left: 28px; top: 556px; font-family: Inter, system-ui, sans-serif; font-size: 14px; font-weight: 700; letter-spacing: 0.12em; color: #94A3B8; pointer-events: none">TRAY</div>` : null}
     ${v.legacy ? html`<div style="position: absolute; left: 150px; right: 30px; top: 553px; font-size: 18px; color: #CBD5E1; text-align: right; pointer-events: none">𝑈: the plane 𝑥 − 2𝑦 + 𝑧 = 0 in ℝ³</div>` : null}
 
     ${v.groups.map((g) => html`
@@ -1245,36 +1302,9 @@ export class Range extends Component {
       <button onClick=${p.tap} aria-label="Plus. Double-tap to line these terms up" style=${`position: absolute; left: ${p.x}px; top: ${p.y}px; width: 38px; height: 38px; padding: 0; border-radius: 19px; z-index: ${p.z}; border: 1.5px solid rgba(203,213,225,0.45); background: rgba(148,163,184,0.20); color: #E2E8F0; font-family: Inter, system-ui, sans-serif; font-size: 26px; font-weight: 500; line-height: 34px; text-align: center; opacity: ${p.op}; pointer-events: ${p.pe}; transition: opacity 0.3s ease; cursor: pointer`}>+</button>
     `)}
 
-    ${v.vecs.map((t) => html`
-      <button onPointerDown=${t.down} aria-label=${t.aria} style=${`position: absolute; left: ${t.x}px; top: ${t.y}px; width: ${t.w}px; height: 88px; padding: 0; border: none; background: transparent; touch-action: none; cursor: grab; z-index: ${t.z}; transform: scale(${t.scale}); filter: drop-shadow(0 ${t.shadow}px 12px rgba(0,0,0,0.40)); animation: ${t.anim}; --dx: ${t.dx}px; --dy: ${t.dy}px; font-family: inherit`}>
-        <span style="position: absolute; left: 0; top: 5px; width: 52px; height: 83px; display: block; clip-path: polygon(0 0, 30px 0, 52px 50%, 30px 100%, 0 100%, 22px 50%); background: #B7791F"></span>
-        <span style="position: absolute; left: 0; top: 0; width: 52px; height: 83px; display: block; clip-path: polygon(0 0, 30px 0, 52px 50%, 30px 100%, 0 100%, 22px 50%); background: #F1E7CD">
-          <span style="position: absolute; left: 0; top: 0; width: 52px; height: 30px; display: block; background: #C38F2A; box-shadow: inset 0 3px 6px rgba(60,38,0,0.60)"></span>
-          <span style="position: absolute; left: 8px; top: 0; width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; color: #5A420E; font-size: 17px; font-weight: 700">𝐅</span>
-        </span>
-        <span style="position: absolute; left: 0; top: 5px; width: 100%; height: 83px; display: block; clip-path: polygon(33px 0, calc(100% - 22px) 0, 100% 50%, calc(100% - 22px) 100%, 33px 100%, 55px 50%); background: ${t.lip}"></span>
-        <span style=${`position: absolute; left: 0; top: 0; width: 100%; height: 83px; display: block; clip-path: polygon(33px 0, calc(100% - 22px) 0, 100% 50%, calc(100% - 22px) 100%, 33px 100%, 55px 50%); background: ${t.face}`}>
-          <span style="position: absolute; left: 0; top: 0; right: 0; height: 30px; box-sizing: border-box; padding: 0 26px 0 60px; display: flex; align-items: center; justify-content: center; background: #2F5BD3; color: #FFFFFF; font-size: 15px; font-weight: 700; white-space: nowrap">${t.type}</span>
-          <span style=${`position: absolute; left: 0; top: 30px; right: 0; bottom: 0; box-sizing: border-box; padding: 0 26px 0 60px; display: flex; align-items: center; justify-content: center; font-size: ${t.elSize}px; color: ${t.fg}; white-space: nowrap`}>${t.el}</span>
-        </span>
-        ${t.hasField ? html`
-          <span onPointerDown=${t.pieceDown} style=${`position: absolute; left: 0; top: 0; width: 46px; height: 34px; display: block; transform: scale(${t.pieceScale})`}>
-            <span style="position: absolute; left: 0; top: 3px; width: 46px; height: 30px; display: block; clip-path: polygon(0 0, 30px 0, 45.9px 100%, 15.9px 100%); background: #B7791F"></span>
-            <span style=${`position: absolute; left: 0; top: 0; width: 46px; height: 30px; display: flex; align-items: center; justify-content: center; clip-path: polygon(0 0, 30px 0, 45.9px 100%, 15.9px 100%); background: ${t.pieceBg}; color: #2A1D04; font-size: 17px; font-weight: 700`}>${t.fLabel}</span>
-          </span>
-        ` : null}
-      </button>
-    `)}
+    ${v.vecs.map(t => this.vecHtml(t))}
 
-    ${v.hexes.map((t) => html`
-      <button onPointerDown=${t.down} aria-label=${t.aria} style=${`position: absolute; left: ${t.x}px; top: ${t.y}px; width: 96px; height: 88px; padding: 0; border: none; background: transparent; touch-action: none; cursor: grab; z-index: ${t.z}; transform: translateY(${t.sink}px) scale(${t.scale}); filter: drop-shadow(0 ${t.shadow}px 12px rgba(0,0,0,0.40)); animation: ${t.anim}; --dx: ${t.dx}px; --dy: ${t.dy}px; font-family: inherit`}>
-        <span style="position: absolute; left: 0; top: 5px; width: 100%; height: 83px; display: block; clip-path: polygon(22px 0, calc(100% - 22px) 0, 100% 50%, calc(100% - 22px) 100%, 22px 100%, 0 50%); background: ${t.lip}"></span>
-        <span style=${`position: absolute; left: 0; top: 0; width: 100%; height: 83px; display: flex; flex-direction: column; clip-path: polygon(22px 0, calc(100% - 22px) 0, 100% 50%, calc(100% - 22px) 100%, 22px 100%, 0 50%); background: ${t.face}`}>
-          <span style=${`height: 30px; display: flex; align-items: center; justify-content: center; background: ${t.band}; color: #2A1D04; font-size: 17px; font-weight: 700`}>${t.type}</span>
-          <span style=${`flex: 1 1 auto; display: flex; align-items: center; justify-content: center; font-size: ${t.elSize}px; color: ${t.fg}; white-space: nowrap`}>${t.el}</span>
-        </span>
-      </button>
-    `)}
+    ${v.hexes.map(t => this.hexHtml(t))}
 
     ${v.ghosts.map((t) => html`
       <div aria-hidden="true" style=${`position: absolute; left: ${t.x}px; top: ${t.y}px; width: 96px; height: 88px; z-index: 880; opacity: 0.5; pointer-events: none`}>
@@ -1316,6 +1346,28 @@ export class Range extends Component {
     </div>
     ${v.showReset ? html`
       <button onClick=${v.zoomReset} style="position: absolute; right: 18px; bottom: 254px; height: 52px; padding: 0 18px; border-radius: 26px; border: 1.5px solid rgba(203,213,225,0.45); background: rgba(27,37,58,0.94); color: #E2E8F0; font-family: Inter, system-ui, sans-serif; font-size: 18px; font-weight: 600; pointer-events: auto; cursor: pointer">${v.zoomPct}% · Reset</button>
+    ` : null}
+    ${v.tray && !v.tray.open ? html`
+      <button onClick=${v.tray.toggle} aria-label="Open the tray" style="position: absolute; left: 18px; bottom: 108px; height: 60px; padding: 0 22px; border-radius: 30px; border: 1.5px solid rgba(203,213,225,0.45); background: rgba(27,37,58,0.94); color: #E2E8F0; font-family: Inter, system-ui, sans-serif; font-size: 20px; font-weight: 600; cursor: pointer; pointer-events: auto">Tray</button>
+    ` : null}
+    ${v.tray && v.tray.show ? html`
+      <div role="dialog" aria-label="Tray" style=${`position: absolute; left: 16px; top: ${v.tray.top}px; width: 528px; height: ${v.tray.h}px; box-sizing: border-box; border-radius: 22px; background: rgba(27,37,58,0.98); border: 1.5px solid rgba(255,255,255,0.14); box-shadow: 0 10px 30px rgba(0,0,0,0.5); pointer-events: auto; z-index: 1000; font-family: Inter, system-ui, sans-serif`}>
+        <div style="display: flex; align-items: center; gap: 8px; padding: 12px 12px 0 14px">
+          ${['tray', 'lean'].map(tab => html`
+            <button onClick=${v.tray.pick(tab)} aria-pressed=${v.tray.tab === tab ? 'true' : 'false'} style=${`height: 42px; padding: 0 18px; border-radius: 21px; border: 1.5px solid ${v.tray.tab === tab ? '#F2B33D' : 'rgba(203,213,225,0.3)'}; background: ${v.tray.tab === tab ? 'rgba(242,179,61,0.16)' : 'transparent'}; color: ${v.tray.tab === tab ? '#F2B33D' : '#CBD5E1'}; font: inherit; font-size: 17px; font-weight: 700; letter-spacing: 0.06em; cursor: pointer`}>${tab === 'tray' ? 'TRAY' : 'LEAN'}</button>
+          `)}
+          <span style="flex: 1"></span>
+          <button onClick=${v.tray.toggle} aria-label="Close the tray" style="width: 42px; height: 42px; border-radius: 21px; border: 1.5px solid rgba(203,213,225,0.3); background: transparent; color: #CBD5E1; font: inherit; font-size: 22px; line-height: 1; cursor: pointer">×</button>
+        </div>
+        ${v.tray.tab === 'tray' ? html`
+          <div style="position: absolute; left: 0; right: 0; top: 0; bottom: 0; pointer-events: none">
+            <div style="pointer-events: auto">${this.hexHtml(v.tray.tiles.hex)}${this.vecHtml(v.tray.tiles.vec)}</div>
+            <div style="position: absolute; left: 290px; right: 20px; top: 96px; font-size: 15px; line-height: 21px; color: #94A3B8">Drag a 0 onto a term, or a sum’s right bracket, to add + 0.</div>
+          </div>
+        ` : html`
+          <div style="padding: 40px 24px; font-size: 17px; color: #94A3B8">Nothing here yet.</div>
+        `}
+      </div>
     ` : null}
     <div style="position: absolute; left: 0; right: 0; bottom: 0; height: 68px; background: linear-gradient(rgba(18,26,43,0), rgba(18,26,43,0.95) 40%)"></div>
     <div style="position: absolute; left: 24px; right: 24px; bottom: 16px; text-align: center; font-family: Inter, system-ui, sans-serif; font-size: 16px; line-height: 22px; color: #94A3B8">${v.hint}</div>
