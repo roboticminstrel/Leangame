@@ -835,9 +835,18 @@ export class Range extends Component {
       }
     }, null, null));
     if (!best) return null;
-    const n = this.locate(this.state.tops, best.id).node;
+    // a tile inside a product means the whole term: a docked vector is its a·v, a factor of a scalar product is the
+    // product, so the 0 lands after the term (a·v + 0), not inside it (a·(v + 0))
+    const loc = this.locate(this.state.tops, best.id);
+    const n = loc.kind === 'vec' || (loc.kind === 'factor' && !loc.parent.vec) ? loc.parent : loc.node;
     const ty = this.typeOf(n);
-    return { id: n.id, sp: ty.sp, f: ty.f, kind: n.t };
+    return { id: n.id, sp: ty.sp, f: ty.f, kind: n.t, glow: this.ids(n) };
+  }
+  // a short text form of a term, for messages: −1·𝑣, (2 + 3)·𝑣
+  label(n) {
+    if (n.t === 's' || n.t === 'v') return n.el;
+    if (n.t === 'prod') return n.factors.map(f => this.label(f)).concat(n.vec ? [this.label(n.vec)] : []).join('·');
+    return '(' + n.terms.map(t => this.label(t.node)).join(' + ') + ')';
   }
   // v  ->  v + 0 (Axler 1.20, additive identity, read right to left), and a  ->  a + 0 for scalars (the field's). The 0 lands just right of its target, in the
   // same sum: after a term, at the right end of a bracket, or in a new bracket (v + 0) for a vector on its own or
@@ -892,7 +901,7 @@ export class Range extends Component {
       this.setState({ tops: this.normTops(tops), slide: { id: z.id, x: pc.x, y: pc.y } });
       clearTimeout(this._st);
       this._st = setTimeout(() => this.setState({ slide: null }), 450);
-      const name = tgt.t === 'v' || tgt.t === 's' ? tgt.el : 'the sum';
+      const name = tgt.t === 'v' || tgt.t === 's' ? tgt.el : tgt.t === 'prod' ? this.label(tgt) : 'the sum';
       this.flash(at, name + ' = ' + name + ' + 0 · additive identity', 'ok');
       return;
     }
@@ -966,7 +975,7 @@ export class Range extends Component {
     this._ov = St.override;
     this._dset = new Set(St.dragIds || []);
     this._glow = St.preview && (St.preview.type === 'collect' || St.preview.type === 'collectV') ? new Set(St.preview.glow) : null;
-    if (St.zeroHover) this._glow = new Set([St.zeroHover.id]);
+    if (St.zeroHover) this._glow = new Set(St.zeroHover.glow || [St.zeroHover.id]);
     const R = this.layout(St.tops);
     const zb = { l: 10, r: 550 };
     this.zoneIds.forEach(id => { const p = this.P.get(id); if (p) { zb.l = Math.min(zb.l, p.x - 24); zb.r = Math.max(zb.r, p.x + p.w + 24); } });

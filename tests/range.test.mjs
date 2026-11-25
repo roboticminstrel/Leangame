@@ -206,12 +206,29 @@ test('zero: dropped on a vector on its own, it becomes (w + 0), with the 0 to th
   assert.match(c.state.flash.text, /𝑤 = 𝑤 \+ 0/);
 });
 
-test('zero: on a docked vector it makes a(v + 0), and the value is unchanged', () => {
+test('zero: on a docked vector it goes after the whole term (−1·v + 0), not inside it, and the value is unchanged', () => {
   const c = make();
-  const v = c.state.tops[0].node.vec;
-  dragPiece(c, 'PZ', ...centre(c, v.id));
-  assert.equal(show(c.state.tops[0].node), '(2 + 3)·(𝑣 + 0)');
+  const T = c.state.tops[1].node; const v = T.vec;
+  const hover = dragPiece(c, 'PZ', ...centre(c, v.id));
+  assert.equal(hover.id, T.id, 'the target is the term −1·𝑣');
+  assert.ok(hover.glow.includes(T.factors[0].id) && hover.glow.includes(v.id), 'the whole term glows');
+  assert.ok(c.state.tops.some(t => show(t.node) === '−1·𝑣'), '−1·𝑣 is untouched');
+  assert.equal(zone(c).filter(x => x === '0').length, 1, 'a 0 joined the expression as its own term');
   assert.deepEqual(result(c), ['= 4𝑣']);
+  assert.match(c.state.flash.text, /−1·𝑣 = −1·𝑣 \+ 0/);
+});
+
+test('zero: inside a vector-sum bracket a docked term gets + 0 after it', () => {
+  const c = make();
+  const w = byEl(c, '𝑤');
+  dragPiece(c, 'PZ', ...centre(c, w.id));         // (𝑤 + 0)
+  const S = c.state.tops.find(t => t.node.t === 'sum' && t.node.terms.some(u => u.node.id === w.id)).node;
+  const half = byEl(c, '½'); c.renderVals(); const pw = c.P.get(w.id);
+  dragTo(c, half.id, pw.x - 96 + 54 + 48, pw.y + 44); // dock ½ onto 𝑤: (½·𝑤 + 0)
+  const S1 = c.state.tops.find(t => t.node.id === S.id).node;
+  assert.equal(show(S1), '(½·𝑤 + 0)');
+  dragPiece(c, 'PZ', ...centre(c, w.id));
+  assert.equal(show(c.state.tops.find(t => t.node.id === S.id).node), '(½·𝑤 + 0 + 0)');
 });
 
 test('zero: hovering a vector sum’s right bracket highlights the whole bracket; the 0 joins at the right end', () => {
@@ -244,7 +261,8 @@ test('zero: works in Rules mode; dropped on empty board it goes home; tapped it 
   const pz = c.state.pieces.find(p => p.id === 'PZ'); assert.equal(pz.x, pz.hx);
   const v = c.state.tops[1].node.vec;
   dragPiece(c, 'PZ', ...centre(c, v.id));
-  assert.equal(show(c.state.tops.find(t => t.node.t === 'prod' && t.node.factors[0].el === '−1').node), '−1·(𝑣 + 0)');
+  assert.ok(c.state.tops.some(t => show(t.node) === '−1·𝑣'), 'the term is untouched');
+  assert.equal(zone(c).filter(x => x === '0').length, 1, 'the 0 is its own term');
   c.pieceDown(c.state.pieces.find(p => p.id === 'PZ'))(ev(0, 0)); c.pend();
   assert.match(c.state.flash.text, /Drag the 0 onto a vector/);
 });

@@ -34,7 +34,7 @@ export function createLean({ fetch = globalThis.fetch.bind(globalThis), base = '
       return { state: 'offline', detail: 'Can’t reach the server' };
     }
     const type = r.headers.get('content-type') || '';
-    if (!type.includes('json')) return { state: 'offline', detail: 'No Lean here (local copy?)' };
+    if (!type.includes('json')) return { state: 'offline', detail: 'The Lean server isn’t set up yet' };
     const j = await r.json();
     return r.ok || j.state ? j : { state: 'error', detail: j.error || `HTTP ${r.status}` };
   }
