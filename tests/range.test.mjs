@@ -176,7 +176,7 @@ test('a bracket inside a sum collapses into it', () => {
 function dragPiece(c, pid, tx, ty) {
   c.renderVals();
   const pc = c.state.pieces.find(p => p.id === pid);
-  const dx = tx - (pc.x + c.K.ZW / 2), dy = ty - (pc.y + 44);
+  const dx = tx - (pc.x + (pid === 'PZS' ? 48 : c.K.ZW / 2)), dy = ty - (pc.y + 44);
   c.pieceDown(pc)(ev(0, 0));
   c.pmove(ev(dx / 2, dy / 2)); c.renderVals();
   c.pmove(ev(dx, dy)); c.renderVals();
@@ -247,4 +247,27 @@ test('zero: works in Rules mode; dropped on empty board it goes home; tapped it 
   assert.equal(show(c.state.tops.find(t => t.node.t === 'prod' && t.node.factors[0].el === '−1').node), '−1·(𝑣 + 0)');
   c.pieceDown(c.state.pieces.find(p => p.id === 'PZ'))(ev(0, 0)); c.pend();
   assert.match(c.state.flash.text, /Drag the 0 onto a vector/);
+});
+
+test('scalar zero: in Rules mode it joins the bracket multiplying v: (2 + 3 + 0)v, still 4v', () => {
+  const c = make();
+  c.setState({ rules: true });
+  const G = c.state.tops[0].node.factors[0];
+  const hover = dragPiece(c, 'PZS', ...rightBracket(c, G.id));
+  assert.equal(hover.id, G.id);
+  assert.equal(show(c.state.tops[0].node), '(2 + 3 + 0)·𝑣');
+  assert.equal(c.state.tops[0].node.factors[0].terms[2].node.field, 'R', 'a real zero, like the sum');
+  assert.deepEqual(result(c), ['= 4𝑣']);
+});
+
+test('scalar zero: on a scalar inside the bracket it goes right after it; vectors ignore it, and the vector 0 ignores scalars', () => {
+  const c = make();
+  const two = c.state.tops[0].node.factors[0].terms[0].node;
+  dragPiece(c, 'PZS', ...centre(c, two.id));
+  assert.equal(show(c.state.tops[0].node), '(2 + 0 + 3)·𝑣');
+  const w = byEl(c, '𝑤');
+  assert.equal(dragPiece(c, 'PZS', ...centre(c, w.id)), null);
+  const three = c.state.tops[0].node.factors[0].terms[2].node;
+  assert.equal(dragPiece(c, 'PZ', ...centre(c, three.id)), null);
+  assert.equal(show(c.state.tops[0].node), '(2 + 0 + 3)·𝑣', 'nothing else changed');
 });

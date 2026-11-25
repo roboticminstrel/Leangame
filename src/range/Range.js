@@ -35,8 +35,9 @@ export class Range extends Component {
       pieces: [
         { id: 'P1', kind: 'strip', field: 'R', x: 22, y: 850, hx: 22, hy: 850 },
         { id: 'P2', kind: 'strip', field: 'C', x: 88, y: 850, hx: 88, hy: 850 },
-        { id: 'PS', kind: 'paren', x: 166, y: 842, hx: 166, hy: 842 },
-        { id: 'PZ', kind: 'zero', x: 342, y: 846, hx: 342, hy: 846 }
+        { id: 'PS', kind: 'paren', x: 150, y: 842, hx: 150, hy: 842 },
+        { id: 'PZS', kind: 'zeroS', x: 306, y: 846, hx: 306, hy: 846 },
+        { id: 'PZ', kind: 'zero', x: 410, y: 846, hx: 410, hy: 846 }
       ]
     };
   }
@@ -342,9 +343,10 @@ export class Range extends Component {
     const z = (dragging ? 900 : 0) + (ctx.z != null ? ctx.z : depth * 20 + 4);
     this.P.set(n.id, { x: x, y: y, w: m.w, h: m.h, depth: depth });
     if (n.t === 's') {
-      R.hexes.push({ x: x, y: y, el: n.el, type: this.fieldSym(n.field), elSize: n.el.length > 3 ? 20 : 28,
+      const sl = this.state.slide && this.state.slide.id === n.id ? this.state.slide : null;
+      R.hexes.push({ x: x, y: y, dx: sl ? sl.x - x : 0, dy: sl ? sl.y - y : 0, el: n.el, type: this.fieldSym(n.field), elSize: n.el.length > 3 ? 20 : 28,
         band: ctx.abstract ? 'repeating-linear-gradient(135deg, #F2B33D 0 6px, #DFA02A 6px 12px)' : '#F2B33D', sink: ctx.abstract ? 3 : 0,
-        z: z, scale: dragging ? 1.04 : 1, shadow: dragging ? 14 : 7, anim: this._glow && this._glow.has(n.id) ? 'rgPulse 1.4s ease-in-out infinite' : 'none', down: this.onDown(n.id, 'self'), aria: 'Scalar ' + n.el + ' in ' + this.fieldSym(n.field) });
+        z: z, scale: dragging ? 1.04 : 1, shadow: dragging ? 14 : 7, anim: sl ? 'zeroIn 0.4s ease-out' : this._glow && this._glow.has(n.id) ? 'rgPulse 1.4s ease-in-out infinite' : 'none', down: this.onDown(n.id, 'self'), aria: 'Scalar ' + n.el + ' in ' + this.fieldSym(n.field) });
       return;
     }
     if (n.t === 'v') {
@@ -806,7 +808,7 @@ export class Range extends Component {
   pieceDown(pc) {
     return e => {
       if (e && e.preventDefault) e.preventDefault();
-      if (this.state.rules && pc.kind !== 'zero') return;
+      if (this.state.rules && pc.kind !== 'zero' && pc.kind !== 'zeroS') return;
       this.pdrag = { id: pc.id, sx: e.clientX, sy: e.clientY, ox: pc.x, oy: pc.y, moved: false };
     };
   }
@@ -815,34 +817,38 @@ export class Range extends Component {
     if (!d.moved && Math.abs(w.dx) + Math.abs(w.dy) < 8) return;
     d.moved = true;
     const up = { pieces: this.state.pieces.map(p => p.id === d.id ? Object.assign({}, p, { x: d.ox + w.dx, y: d.oy + w.dy }) : p) };
-    if (d.id === 'PZ') up.zeroHover = this.zeroTarget(d.ox + w.dx + this.K.ZW / 2, d.oy + w.dy + 44);
+    if (d.id === 'PZ') up.zeroHover = this.zeroTarget(d.ox + w.dx + this.K.ZW / 2, d.oy + w.dy + 44, 'v');
+    if (d.id === 'PZS') up.zeroHover = this.zeroTarget(d.ox + w.dx + 48, d.oy + w.dy + 44, 's');
     this.setState(up);
   }
-  // What the dragged 0 is over: a vector tile, or a vector sum's right bracket (the deepest one, tiles first)
-  zeroTarget(cx, cy) {
+  // What a dragged 0 is over: a tile of its kind ('v' vectors, 's' scalars), or the right bracket of a sum of that
+  // kind (the deepest one, tiles first)
+  zeroTarget(cx, cy, kind) {
     let best = null;
     const take = (n, depth, prio) => { if (!best || depth > best.depth || (depth === best.depth && prio > best.prio)) best = { id: n.id, depth: depth, prio: prio }; };
     this.state.tops.forEach(t => this.walk(t.node, n => {
       const p = this.P.get(n.id); if (!p) return;
-      if (n.t === 'v' && this.inRect(p, cx, cy, 6)) take(n, p.depth, 1);
-      else if (n.t === 'sum' && this.typeOf(n).k === 'v') {
+      if (n.t === (kind === 'v' ? 'v' : 's') && this.inRect(p, cx, cy, 6)) take(n, p.depth, 1);
+      else if (n.t === 'sum' && this.typeOf(n).k === kind) {
         const rb = { x: p.x + p.w - 34 - 10, y: p.y, w: 44, h: p.h };
         if (this.inRect(rb, cx, cy, 6)) take(n, p.depth, 0);
       }
     }, null, null));
     if (!best) return null;
     const n = this.locate(this.state.tops, best.id).node;
-    return { id: n.id, sp: this.typeOf(n).sp, kind: n.t };
+    const ty = this.typeOf(n);
+    return { id: n.id, sp: ty.sp, f: ty.f, kind: n.t };
   }
-  // v  ->  v + 0 (Axler 1.20, additive identity, read right to left). The 0 lands just right of its target, in the
+  // v  ->  v + 0 (Axler 1.20, additive identity, read right to left), and a  ->  a + 0 for scalars (the field's). The 0 lands just right of its target, in the
   // same sum: after a term, at the right end of a bracket, or in a new bracket (v + 0) for a vector on its own or
   // docked after scalars. Returns the new 0, or null.
   addZero(tops, id) {
     const loc = this.locate(tops, id); if (!loc) return null;
     const X = loc.node; const ty = this.typeOf(X);
-    if (ty.k !== 'v') return null;
+    if (ty.k !== 'v' && ty.k !== 's') return null;
     const K = this.K;
-    const z = this.mkV(ty.sp, '0', 'zero', ty.f || null, K.ZW);
+    const z = ty.k === 'v' ? this.mkV(ty.sp, '0', 'zero', ty.f || null, K.ZW) : this.mkS(ty.f, '0', '0');
+    const zw = this.measure(z).w;
     if (X.t === 'sum') {
       let x1 = -K.GAP, y0 = -44, y1 = 44;
       if (X.terms.length) { x1 = -1e9; y0 = 1e9; y1 = -1e9; }
@@ -852,7 +858,7 @@ export class Range extends Component {
     }
     const m = this.measure(X);
     const beside = (list, t, inSame) => {
-      list.forEach(u => { if (u !== t && inSame(u) && u.x >= t.x + m.w - 1) u.x += K.ZW + K.GAP; });
+      list.forEach(u => { if (u !== t && inSame(u) && u.x >= t.x + m.w - 1) u.x += zw + K.GAP; });
       list.splice(list.indexOf(t) + 1, 0, { node: z, x: t.x + m.w + K.GAP, y: t.y + m.h / 2 - 44 });
     };
     if (loc.kind === 'term') { beside(loc.parent.terms, loc.parent.terms[loc.idx], () => true); return z; }
@@ -865,7 +871,7 @@ export class Range extends Component {
       tops.forEach(u => {
         if (u === t) return;
         const um = this.measure(u.node);
-        if (u.y < t.y + m.h && u.y + um.h > t.y && u.x >= t.x + m.w) u.x += K.ZW + K.GAP + K.SPAD + 34;
+        if (u.y < t.y + m.h && u.y + um.h > t.y && u.x >= t.x + m.w) u.x += zw + K.GAP + K.SPAD + 34;
       });
     }
     this.setRef(tops, loc, S);
@@ -876,17 +882,17 @@ export class Range extends Component {
     const pc = this.state.pieces.find(p => p.id === d.id);
     const home = this.state.pieces.map(p => p.id === d.id ? Object.assign({}, p, { x: p.hx, y: p.hy }) : p);
     let tops = this.clone(this.state.tops);
-    if (pc.kind === 'zero') {
+    if (pc.kind === 'zero' || pc.kind === 'zeroS') {
       const hit = d.moved ? this.state.zeroHover : null;
       this.setState({ pieces: home, zeroHover: null });
-      if (!d.moved) { this.flash({ x: pc.hx, y: pc.hy }, 'Drag the 0 onto a vector, or a vector sum’s right bracket', 'info'); return; }
+      if (!d.moved) { this.flash({ x: pc.hx, y: pc.hy }, pc.kind === 'zero' ? 'Drag the 0 onto a vector, or a vector sum’s right bracket' : 'Drag the 0 onto a scalar, or a scalar sum’s right bracket', 'info'); return; }
       if (!hit) return;
       const at = this.P.get(hit.id); const tgt = this.locate(tops, hit.id).node;
       const z = this.addZero(tops, hit.id); if (!z) return;
       this.setState({ tops: this.normTops(tops), slide: { id: z.id, x: pc.x, y: pc.y } });
       clearTimeout(this._st);
       this._st = setTimeout(() => this.setState({ slide: null }), 450);
-      const name = tgt.t === 'v' ? tgt.el : 'the sum';
+      const name = tgt.t === 'v' || tgt.t === 's' ? tgt.el : 'the sum';
       this.flash(at, name + ' = ' + name + ' + 0 · additive identity', 'ok');
       return;
     }
@@ -1014,16 +1020,21 @@ export class Range extends Component {
       op: rules ? 0.3 : 1, pe: rules ? 'none' : 'auto', down: this.pieceDown(p), aria: 'Field ' + this.fieldSym(p.field) + ': slot onto a vector’s 𝐅, or tap for a scalar' }));
     const ps = St.pieces.find(p => p.kind === 'paren');
     const zp = St.pieces.find(p => p.kind === 'zero'); const zDrag = !!(this.pdrag && this.pdrag.id === zp.id);
-    const zeroTile = { x: zp.x, y: zp.y, w: this.K.ZW, type: St.zeroHover ? (St.zeroHover.sp || '𝑉').split(' ')[0] : '𝑉', el: '0', elSize: 27,
+    const zeroTile = { x: zp.x, y: zp.y, w: this.K.ZW, type: zDrag && St.zeroHover ? (St.zeroHover.sp || '𝑉').split(' ')[0] : '𝑉', el: '0', elSize: 27,
       hasField: false, z: zDrag ? 990 : 6, scale: zDrag ? 1.04 : 1, shadow: zDrag ? 14 : 7, anim: 'none', dx: 0, dy: 0, down: this.pieceDown(zp),
       aria: 'The zero vector: drag it onto a vector, or onto a vector sum’s right bracket, to add + 0' };
+    const zs = St.pieces.find(p => p.kind === 'zeroS'); const zsDrag = !!(this.pdrag && this.pdrag.id === zs.id);
+    const zsHover = zsDrag && St.zeroHover;
+    const zeroHex = { x: zs.x, y: zs.y, dx: 0, dy: 0, el: '0', elSize: 28, type: zsHover && zsHover.f ? this.fieldSym(zsHover.f) : '𝐅', band: '#F2B33D', sink: 0,
+      z: zsDrag ? 990 : 6, scale: zsDrag ? 1.04 : 1, shadow: zsDrag ? 14 : 7, anim: 'none', down: this.pieceDown(zs),
+      aria: 'The scalar zero: drag it onto a scalar, or onto a scalar sum’s right bracket, to add + 0' };
     return {
       setBoard: this.setBoard, panDown: this.panDown(), panX: St.panX, panY: St.panY, worldScale: this.scaleNow(),
       baseScale: this.fitScale(), overlayH: (St.bh || 716) / this.fitScale(),
       zoomIn: () => this.zoomAround(this.state.zoom * 1.25), zoomOut: () => this.zoomAround(this.state.zoom / 1.25),
       zoomReset: () => this.setState({ zoom: 1, panX: 0, panY: 0 }), showReset: Math.abs(St.zoom - 1) > 0.01 || St.panX !== 0 || St.panY !== 0, zoomPct: Math.round(St.zoom * 100),
       zoneL: zb.l, zoneW: zb.r - zb.l,
-      ghosts: ghosts, groups: R.groups, pluses: R.pluses, vecs: R.vecs.concat([zeroTile]), hexes: R.hexes, dots: R.dots, strips: strips,
+      ghosts: ghosts, groups: R.groups, pluses: R.pluses, vecs: R.vecs.concat([zeroTile]), hexes: R.hexes.concat([zeroHex]), dots: R.dots, strips: strips,
       parenSrc: { x: ps.x, y: ps.y, z: this.pdrag && this.pdrag.id === ps.id ? 990 : 5, op: rules ? 0.3 : 1, pe: rules ? 'none' : 'auto', down: this.pieceDown(ps) },
       results: results, flashes: flashes,
       toggleRules: () => this.setState({ rules: !this.state.rules }),
@@ -1095,7 +1106,7 @@ export class Range extends Component {
     `)}
 
     ${v.hexes.map((t) => html`
-      <button onPointerDown=${t.down} aria-label=${t.aria} style=${`position: absolute; left: ${t.x}px; top: ${t.y}px; width: 96px; height: 88px; padding: 0; border: none; background: transparent; touch-action: none; cursor: grab; z-index: ${t.z}; transform: translateY(${t.sink}px) scale(${t.scale}); filter: drop-shadow(0 ${t.shadow}px 12px rgba(0,0,0,0.40)); animation: ${t.anim}; font-family: inherit`}>
+      <button onPointerDown=${t.down} aria-label=${t.aria} style=${`position: absolute; left: ${t.x}px; top: ${t.y}px; width: 96px; height: 88px; padding: 0; border: none; background: transparent; touch-action: none; cursor: grab; z-index: ${t.z}; transform: translateY(${t.sink}px) scale(${t.scale}); filter: drop-shadow(0 ${t.shadow}px 12px rgba(0,0,0,0.40)); animation: ${t.anim}; --dx: ${t.dx}px; --dy: ${t.dy}px; font-family: inherit`}>
         <span style="position: absolute; left: 0; top: 5px; width: 100%; height: 83px; display: block; clip-path: polygon(22px 0, calc(100% - 22px) 0, 100% 50%, calc(100% - 22px) 100%, 22px 100%, 0 50%); background: #B7791F"></span>
         <span style="position: absolute; left: 0; top: 0; width: 100%; height: 83px; display: flex; flex-direction: column; clip-path: polygon(22px 0, calc(100% - 22px) 0, 100% 50%, calc(100% - 22px) 100%, 22px 100%, 0 50%); background: #FFF8E6">
           <span style=${`height: 30px; display: flex; align-items: center; justify-content: center; background: ${t.band}; color: #2A1D04; font-size: 17px; font-weight: 700`}>${t.type}</span>
