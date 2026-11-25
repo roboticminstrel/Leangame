@@ -8,6 +8,7 @@ export class Range extends Component {
     super(props);
     this.uid = 1;
     this.K = { BIT: 52, PAREN: 18, SPAD: 18, ZT: 126, ZB: 526, WW: 560, ZW: 110, GAP: 52 };
+    if (!props.legacy) Object.assign(this.K, { AY: 84, GY: 192, ZT: 300, ZB: 700 }); // ASSUMPTIONS, GOAL, EXPRESSION
     this.P = new Map();
     this.M = new Map();
     this.state = this.initialState();
@@ -32,13 +33,17 @@ export class Range extends Component {
     const g = this.mkSum([{ node: this.mkS('R', '2', '2'), x: 0, y: 0 }, { node: this.mkS('R', '3', '3'), x: 146, y: 0 }]);
     const base = { flash: null, spawnCount: 0, holding: null, override: null, dragIds: null, panX: 0, panY: 0, zoom: 1 };
     if (!this.props.legacy) {
-      // Rules mode only; the tray holds the two zeros (0 in ℝ, 0 in 𝑉), each an endless supply
+      // Rules mode only; the tray holds the two zeros (0 in ℝ, 0 in 𝑉), each an endless supply, and what the player
+      // taps. Level 1 (Axler 1.30): from 0·𝑣 reach the zero vector. props.demo: the earlier (2 + 3)𝑣 + −1𝑣 (tests).
+      const Y = this.K.ZT + 110;
+      const tops = this.props.demo
+        ? [{ node: this.mkProd([g], this.mkV('𝑉', '𝑣', 'v', 'R', 140)), x: 24, y: Y },
+          { node: this.mkProd([this.mkS('R', '−1', '-1')], this.mkV('𝑉', '𝑣', 'v', 'R', 140)), x: 214, y: Y + 168 }]
+        : [{ node: this.mkProd([this.mkS('R', '0', '0')], this.mkV('𝑉', '𝑣', 'v', 'R', 140)), x: 24, y: Y }];
       return Object.assign(base, {
-        rules: true, trayOpen: false, trayTab: 'tray',
-        tops: [
-          { node: this.mkProd([g], this.mkV('𝑉', '𝑣', 'v', 'R', 140)), x: 24, y: 236 },
-          { node: this.mkProd([this.mkS('R', '−1', '-1')], this.mkV('𝑉', '𝑣', 'v', 'R', 140)), x: 214, y: 404 }
-        ],
+        rules: true, trayOpen: false, trayTab: 'tray', trayItems: [], trayNew: {}, slides: {}, tiles: { assume: true, goal: true },
+        goal: this.mkV('𝑉', '0', 'zero', 'R', 110),
+        tops: tops,
         pieces: [
           { id: 'PZS', kind: 'zeroS', field: 'R', x: 30, y: 600, hx: 30, hy: 600 },
           { id: 'PZ', kind: 'zero', x: 150, y: 600, hx: 150, hy: 600 }
@@ -72,7 +77,7 @@ export class Range extends Component {
     this._rs();
     window.addEventListener('resize', this._rs);
     this.ptrs = new Map();
-    this._mv = e => { if (this.ptrs.has(e.pointerId)) this.ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY }); if (this.pinch) this.pinchMove(); else if (this.drag) this.move(e); else if (this.pdrag) this.pmove(e); else if (this.panning) this.panMove(e); };
+    this._mv = e => { if (this.ptrs.has(e.pointerId)) this.ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY }); if (this.pinch) this.pinchMove(); else if (this.drag) this.move(e); else if (this.pdrag) this.pmove(e); else if (this.idrag) this.imove(e); else if (this.panning) this.panMove(e); };
     this._up = e => {
       if (e && this.ptrs.has(e.pointerId)) {
         this.ptrs.delete(e.pointerId);
@@ -83,9 +88,9 @@ export class Range extends Component {
           return;
         }
         if (!this.ptrs.size) this.panning = null;
-        if (!this.drag && !this.pdrag) return;
+        if (!this.drag && !this.pdrag && !this.idrag) return;
       }
-      if (this.drag) this.end(); else if (this.pdrag) this.pend(); else if (this.panning) this.panning = null; else if (this.state.holding) this.setState({ holding: null });
+      if (this.drag) this.end(); else if (this.pdrag) this.pend(); else if (this.idrag) this.iend(); else if (this.panning) this.panning = null; else if (this.state.holding) this.setState({ holding: null });
     };
     window.addEventListener('pointermove', this._mv);
     window.addEventListener('pointerup', this._up);
@@ -210,6 +215,7 @@ export class Range extends Component {
     return { k: 'bad' };
   }
   cval(v) {
+    if (String(v).charAt(0) === '-' && v !== '-1' && v !== '-i') { const c = this.cval(String(v).slice(1)); return [-c[0], -c[1]]; }
     const M = { '1': [1, 0], '-1': [-1, 0], '0': [0, 0], '2': [2, 0], '3': [3, 0], '√2': [Math.SQRT2, 0], '½': [0.5, 0], 'i': [0, 1], '1+i': [1, 1], '-i': [0, -1] };
     return M[v] || [1, 0];
   }
@@ -370,20 +376,20 @@ export class Range extends Component {
     const z = (dragging ? 900 : 0) + (ctx.z != null ? ctx.z : depth * 20 + 4);
     this.P.set(n.id, { x: x, y: y, w: m.w, h: m.h, depth: depth });
     if (n.t === 's') {
-      const sl = this.state.slide && this.state.slide.id === n.id ? this.state.slide : null;
+      const sl = this.slideOf(n.id);
       const lk = this.look(n);
-      R.hexes.push({ x: x, y: y, dx: sl ? sl.x - x : 0, dy: sl ? sl.y - y : 0, face: lk.face, fg: lk.fg, lip: lk.lip, el: n.el, type: this.fieldSym(n.field), elSize: n.el.length > 3 ? 20 : 28,
+      R.hexes.push({ id: n.id, x: x, y: y, dx: sl ? sl.x - x : 0, dy: sl ? sl.y - y : 0, face: lk.face, fg: lk.fg, lip: lk.lip, el: n.el, type: this.fieldSym(n.field), elSize: n.el.length > 3 ? 20 : 28,
         band: ctx.abstract ? 'repeating-linear-gradient(135deg, #F2B33D 0 6px, #DFA02A 6px 12px)' : '#F2B33D', sink: ctx.abstract ? 3 : 0,
-        z: z, scale: dragging ? 1.04 : 1, shadow: dragging ? 14 : 7, anim: sl ? 'zeroIn 0.4s ease-out' : this._glow && this._glow.has(n.id) ? 'rgPulse 1.4s ease-in-out infinite' : 'none', down: this.onDown(n.id, 'self'), aria: 'Scalar ' + n.el + ' in ' + this.fieldSym(n.field) });
+        z: z + (sl && sl.top ? 60 : 0), scale: dragging ? 1.04 : 1, shadow: dragging ? 14 : 7, anim: sl ? 'zeroIn 0.4s ease-out' : this._glow && this._glow.has(n.id) ? 'rgPulse 1.4s ease-in-out infinite' : 'none', down: this.onDown(n.id, 'self'), aria: 'Scalar ' + n.el + ' in ' + this.fieldSym(n.field) });
       return;
     }
     if (n.t === 'v') {
       const holding = this.state.holding === n.id;
-      const sl = this.state.slide && this.state.slide.id === n.id ? this.state.slide : null;
+      const sl = this.slideOf(n.id);
       const lk = this.look(n); const et = this.elText(n);
-      R.vecs.push({ x: x, y: y, w: n.w, type: n.type, el: et, elSize: et.length > 4 ? 21 : 27, face: lk.face, fg: lk.fg, lip: lk.lip,
+      R.vecs.push({ id: n.id, x: x, y: y, w: n.w, type: n.type, el: et, elSize: et.length > 4 ? 21 : 27, face: lk.face, fg: lk.fg, lip: lk.lip,
         hasField: !!n.field, fLabel: this.fieldSym(n.field), pieceScale: holding ? 0.9 : 1, pieceBg: holding ? '#F7CD6E' : '#F2B33D',
-        z: z, scale: dragging ? 1.04 : 1, shadow: dragging ? 14 : 7, down: this.onDown(n.id, 'self'), pieceDown: this.onDown(n.id, 'strip'),
+        z: z + (sl && sl.top ? 60 : 0), scale: dragging ? 1.04 : 1, shadow: dragging ? 14 : 7, down: this.onDown(n.id, 'self'), pieceDown: this.onDown(n.id, 'strip'),
         anim: sl ? 'zeroIn 0.4s ease-out' : this._glow && this._glow.has(n.id) ? 'rgPulse 1.4s ease-in-out infinite' : 'none', dx: sl ? sl.x - x : 0, dy: sl ? sl.y - y : 0,
         aria: 'Vector ' + et + ' in ' + n.type + (n.field ? ' over ' + this.fieldSym(n.field) : ', field not fixed') });
       return;
@@ -574,7 +580,11 @@ export class Range extends Component {
     clearTimeout(this._lp);
     const d = this.drag; this.drag = null;
     if (!d) return;
-    if (!d.moved) { this.setState({ holding: null, dragIds: null }); return; }
+    if (!d.moved) {
+      this.setState({ holding: null, dragIds: null });
+      if (!this.props.legacy && d.role === 'self') { const n = this.locate(this.state.tops, d.id); if (n && (n.node.t === 's' || n.node.t === 'v')) this.toTray(n.node); }
+      return;
+    }
     if (this.state.zeroHover) this.setState({ zeroHover: null });
     if (d.zeroHover && (d.absorb ? this.absorbZero(d) : this.dropZero(d))) return;
     if (d.rules && d.preview) { this.applyPreview(d); return; }
@@ -989,6 +999,96 @@ export class Range extends Component {
     if (ok) { for (const t of zoneTops) { const e = this.evalN(t.node); if (!e) { val = null; break; } val = val ? this.addE(val, e) : e; if (!val) break; } }
     return { tokens: this.exprTokens(zoneTops.map(t => t.node), true), ok: !!(ok && val), val: ok ? val : null };
   }
+  slideOf(id) {
+    const St = this.state;
+    if (St.slide && St.slide.id === id) return St.slide;
+    return St.slides && St.slides[id] || null;
+  }
+  // The additive inverse of a tile (a fresh copy): 2 ↔ −2, 𝑣 ↔ −𝑣. A 0 is its own inverse: null.
+  negOf(n) {
+    const c = this.cloneFresh(n);
+    if (c.t === 's') {
+      if (c.val === '0') return null;
+      const neg = String(c.val).charAt(0) === '-';
+      c.val = neg ? String(c.val).slice(1) : '-' + c.val; c.el = neg ? c.el.replace(/^−/, '') : '−' + c.el;
+    } else if (c.t === 'v') { if (c.key === 'zero') return null; c.neg = !c.neg; }
+    else return null;
+    return c;
+  }
+  // A tile's identity for matching, ignoring ids and field strips: two 0s in 𝑉 are the same whatever their edge says
+  canon(n) {
+    if (n.t === 's') return 's:' + n.val;
+    if (n.t === 'v') return 'v:' + n.type + ':' + (n.neg ? '-' : '') + n.el;
+    if (n.t === 'prod') return 'p(' + n.factors.map(f => this.canon(f)).join('*') + '|' + (n.vec ? this.canon(n.vec) : '') + ')';
+    return 'g(' + n.terms.map(t => this.canon(t.node)).sort().join('+') + ')';
+  }
+  // Tap: the tile and its inverse join the tray (once each), which opens; new ones pop in
+  toTray(n) {
+    const have = new Set((this.state.trayItems || []).map(it => this.canon(it.node)));
+    const add = [this.cloneFresh(n), this.negOf(n)].filter(x => x && !have.has(this.canon(x)));
+    if (!add.length) { this.setState({ trayOpen: true, trayTab: 'tray' }); return; }
+    const items = add.map(x => ({ id: this.nid('T'), node: x }));
+    const fresh = {}; items.forEach((it, i) => { fresh[it.id] = i * 0.12; });
+    this.setState({ trayItems: (this.state.trayItems || []).concat(items), trayOpen: true, trayTab: 'tray', trayNew: fresh });
+    clearTimeout(this._tn);
+    this._tn = setTimeout(() => this.setState({ trayNew: {} }), 1200);
+  }
+  // A tray item over a 0 of its own type in play (a scalar over a 0 in its field, a vector over a 0 in its space)
+  splitTarget(item, cx, cy) {
+    let best = null;
+    this.state.tops.forEach(t => this.walk(t.node, n => {
+      const isZero = (n.t === 's' && n.val === '0') || (n.t === 'v' && n.key === 'zero');
+      if (!isZero || n.t !== item.t) return;
+      if (n.t === 's' && n.field && item.field && n.field !== item.field) return;
+      if (n.t === 'v' && n.type !== item.type) return;
+      const p = this.P.get(n.id);
+      if (this.inRect(p, cx, cy, 6) && (!best || p.depth >= best.depth)) best = { id: n.id, depth: p.depth, glow: [n.id] };
+    }, null, null));
+    return best;
+  }
+  // 0 = x + (−x) (Axler 1.20, additive inverse, read right to left): the 0 becomes x with −x right after it, in the
+  // same sum; a 0 that isn't a term of a sum (a scalar docked on a vector, say) becomes the bracket (x + −x).
+  splitZero(tops, zeroId, item) {
+    const loc = this.locate(tops, zeroId); if (!loc) return null;
+    const Z = loc.node; const a = this.cloneFresh(item); const b = this.negOf(item); if (!b) return null;
+    const K = this.K; const ma = this.measure(a), mb = this.measure(b), mz = this.measure(Z);
+    const two = (list, t, inSame) => {
+      const grow = ma.w + K.GAP + mb.w - mz.w;
+      list.forEach(u => { if (u !== t && inSame(u) && u.x >= t.x + mz.w - 1) u.x += grow; });
+      list.splice(list.indexOf(t), 1, { node: a, x: t.x, y: t.y + mz.h / 2 - ma.h / 2 }, { node: b, x: t.x + ma.w + K.GAP, y: t.y + mz.h / 2 - mb.h / 2 });
+    };
+    if (loc.kind === 'term') two(loc.parent.terms, loc.parent.terms[loc.idx], () => true);
+    else if (loc.kind === 'top' && this.zoneIds.indexOf(Z.id) >= 0) two(tops, tops[loc.ti], u => this.zoneIds.indexOf(u.node.id) >= 0);
+    else {
+      const S = this.mkSum([{ node: a, x: 0, y: 0 }, { node: b, x: 0, y: 0 }]); this.rowArrange(S);
+      if (loc.kind === 'top') tops[loc.ti].x -= this.sumPadL(S) + 26 + K.SPAD;
+      this.setRef(tops, loc, S);
+    }
+    return { a: a, b: b };
+  }
+  imove(e) {
+    const d = this.idrag; const w = this.worldDelta(e, d);
+    if (!d.moved && Math.abs(w.dx) + Math.abs(w.dy) < 8) return;
+    d.moved = true; d.x = d.ox + w.dx; d.y = d.oy + w.dy;
+    const m = this.measure(d.node);
+    this.setState({ zeroHover: this.splitTarget(d.node, d.x + m.w / 2, d.y + 44), idragAt: { x: d.x, y: d.y } });
+  }
+  iend() {
+    const d = this.idrag; this.idrag = null;
+    const hit = d.moved ? this.state.zeroHover : null;
+    this.setState({ zeroHover: null, idragAt: null });
+    if (!d.moved) { this.flash({ x: 40, y: this.K.ZT }, 'Drag it onto a 0 of the same type to split the 0 into it and its inverse', 'info'); return; }
+    if (!hit) return;
+    const tops = this.clone(this.state.tops);
+    const at = this.P.get(hit.id);
+    const r = this.splitZero(tops, hit.id, d.node); if (!r) return;
+    const slides = {}; slides[r.a.id] = { x: d.x, y: d.y, top: true }; slides[r.b.id] = { x: d.x, y: d.y };
+    this.setState({ tops: this.normTops(tops), slides: slides });
+    clearTimeout(this._ss);
+    this._ss = setTimeout(() => this.setState({ slides: {} }), 650);
+    const a = this.label(r.a), b = this.label(r.b);
+    this.flash(at, '0 = ' + a + ' + ' + b + ' · additive inverse', 'ok');
+  }
   // a short text form of a term, for messages: −1·𝑣, (2 + 3)·𝑣
   label(n) {
     if (n.t === 's' || n.t === 'v') return this.elText(n);
@@ -1118,29 +1218,105 @@ export class Range extends Component {
     this._ft = setTimeout(() => this.setState({ flash: null }), 2000);
   }
 
-  // The tray popup (overlay units: 560 wide, scaled like the board at zoom 1). Its tiles start a drag of the tray
-  // piece from where they sit on screen, converted to board coordinates; the popup hides while the drag lasts.
+  // Tile data (for vecHtml / hexHtml) for any scalar or vector node at (x, y)
+  tileOf(n, x, y) {
+    const lk = this.look(n);
+    if (n.t === 'v') {
+      const et = this.elText(n);
+      return { kind: 'vec', w: n.w, t: { x: x, y: y, w: n.w, type: n.type, el: et, elSize: et.length > 4 ? 21 : 27, face: lk.face, fg: lk.fg, lip: lk.lip,
+        hasField: !!n.field, fLabel: this.fieldSym(n.field), pieceScale: 1, pieceBg: '#F2B33D', z: 6, scale: 1, shadow: 7, anim: 'none', dx: 0, dy: 0,
+        down: null, pieceDown: null, aria: 'Vector ' + et } };
+    }
+    return { kind: 'hex', w: 96, t: { x: x, y: y, dx: 0, dy: 0, el: n.el, elSize: n.el.length > 3 ? 20 : 28, type: this.fieldSym(n.field), band: '#F2B33D', sink: 0,
+      face: lk.face, fg: lk.fg, lip: lk.lip, z: 6, scale: 1, shadow: 7, anim: 'none', down: null, aria: 'Scalar ' + n.el } };
+  }
+  draggedItem(kind) {
+    const d = this.idrag; if (!d || !d.moved) return [];
+    const T = this.tileOf(d.node, d.x, d.y);
+    return T.kind === kind ? [Object.assign(T.t, { z: 990, scale: 1.04, shadow: 14 })] : [];
+  }
+  // The tray popup (overlay units: 560 wide, scaled like the board at zoom 1): the two zeros, then whatever the player
+  // has tapped, flowing in rows. Its tiles start a drag from where they sit on screen, converted to board
+  // coordinates; the popup hides while a drag lasts. New items pop in.
   trayVals(zs, zp, zeroHex, zeroTile) {
     const St = this.state;
-    const H = 230, bottom = 84; const top = (St.bh || 716) / this.fitScale() - bottom - H;
-    const at = (pc, x, y) => {
-      const down = e => {
-        if (e && e.preventDefault) e.preventDefault();
-        if (e && e.stopPropagation) e.stopPropagation();
-        const z = St.zoom; const wx = x / z - St.panX, wy = y / z - St.panY;
-        this.setState({ pieces: this.state.pieces.map(p => p.id === pc.id ? Object.assign({}, p, { x: wx, y: wy }) : p) });
-        this.pdrag = { id: pc.id, sx: e.clientX, sy: e.clientY, ox: wx, oy: wy, moved: false };
-      };
-      return { x: x - 16, y: y - top, down: down };
+    const toWorld = (ox, oy) => ({ x: ox / St.zoom - St.panX, y: oy / St.zoom - St.panY });
+    const stop = e => { if (e && e.preventDefault) e.preventDefault(); if (e && e.stopPropagation) e.stopPropagation(); };
+    const pieceStart = pc => (e, ox, oy) => {
+      const w = toWorld(ox, oy);
+      this.setState({ pieces: this.state.pieces.map(p => p.id === pc.id ? Object.assign({}, p, { x: w.x, y: w.y }) : p) });
+      this.pdrag = { id: pc.id, sx: e.clientX, sy: e.clientY, ox: w.x, oy: w.y, moved: false };
     };
-    const hex = Object.assign({}, zeroHex, at(zs, 16 + 30, top + 92), { z: 1, scale: 1, shadow: 7 });
-    const vec = Object.assign({}, zeroTile, at(zp, 16 + 150, top + 92), { z: 1, scale: 1, shadow: 7 });
+    const itemStart = it => (e, ox, oy) => {
+      const w = toWorld(ox, oy);
+      this.idrag = { id: it.id, node: it.node, sx: e.clientX, sy: e.clientY, ox: w.x, oy: w.y, x: w.x, y: w.y, moved: false };
+    };
+    const entries = [{ kind: 'hex', w: 96, t: zeroHex, start: pieceStart(zs) }, { kind: 'vec', w: this.K.ZW, t: zeroTile, start: pieceStart(zp) }]
+      .concat((St.trayItems || []).map(it => Object.assign(this.tileOf(it.node, 0, 0), { start: itemStart(it), id: it.id })));
+    let x = 22, y = 64, rows = 1;
+    entries.forEach(en => { if (x > 22 && x + en.w > 528 - 18) { x = 22; y += 104; rows++; } en.px = x; en.py = y; x += en.w + 14; });
+    const H = 64 + rows * 104 + 40, bottom = 84; const top = (St.bh || 716) / this.fitScale() - bottom - H;
+    const tiles = entries.map(en => {
+      const fresh = en.id && St.trayNew && St.trayNew[en.id] != null;
+      return Object.assign({}, en.t, { x: en.px, y: en.py, z: 1, scale: 1, shadow: 7,
+        anim: fresh ? 'trayPop 0.5s cubic-bezier(0.2, 1.5, 0.4, 1) ' + St.trayNew[en.id] + 's both' : 'none',
+        down: e => { stop(e); en.start(e, 16 + en.px, top + en.py); } });
+    });
+    const dragging = (this.pdrag && this.pdrag.moved) || (this.idrag && this.idrag.moved);
     return {
-      open: !!St.trayOpen, show: !!St.trayOpen && !(this.pdrag && this.pdrag.moved), tab: St.trayTab || 'tray', top: top, h: H,
-      tiles: { hex: hex, vec: vec },
+      open: !!St.trayOpen, show: !!St.trayOpen && !dragging, tab: St.trayTab || 'tray', top: top, h: H,
+      list: tiles.map((t, i) => ({ kind: entries[i].kind, t: t })), tiles: { hex: tiles[0], vec: tiles[1] }, captionY: H - 34,
       toggle: () => this.setState({ trayOpen: !this.state.trayOpen }),
       pick: tab => () => this.setState({ trayTab: tab })
     };
+  }
+  textW(t) {
+    let w = t.length * 12;
+    try {
+      if (typeof document !== 'undefined') {
+        const c = this._cv || (this._cv = document.createElement('canvas').getContext('2d'));
+        c.font = '24px "STIX Two Text", "Cambria Math", "Times New Roman", serif';
+        w = c.measureText(t).width;
+      }
+    } catch (e) { /* no canvas: keep the estimate */ }
+    return w;
+  }
+  // The theorem's header, above the expression. Each block is plain text (the same size as the readout); tapped, the
+  // pieces that have a tile grow one behind their text: the text slides over to make room, then the tile pops up
+  // under it. Room for the tiles is always kept, so nothing moves vertically.
+  headVals() {
+    const St = this.state; const K = this.K;
+    const V = (bg, lip, fg) => ({ kind: 'para', bg: bg, lip: lip, fg: fg });
+    const vT = V('#2F5BD3', '#1E3A8A', '#FFFFFF'), rT = V('#F2B33D', '#B7791F', '#2A1D04');
+    const v = this.mkV('𝑉', '𝑣', 'v', 'R', 140);
+    const assume = [['{'], ['𝑉', vT], [' : Type}   [VectorSpace '], ['ℝ', rT], [' 𝑉]   ('], ['𝑣', { kind: 'node', node: v }], [' : 𝑉)']];
+    const goal = this.nodeTokens(St.goal);
+    const build = (key, title, y, list) => {
+      const on = !!(St.tiles && St.tiles[key]);
+      const tokens = list.map(([t, tile]) => {
+        const tw = this.textW(t);
+        if (!tile) return { t: t, w: tw };
+        let W, html_ = null, padL = 0, fg = '#16130C';
+        if (tile.kind === 'para') { W = 46; fg = tile.fg; }
+        else {
+          const T = this.tileOf(tile.node, 0, 0);
+          Object.assign(T.t, { el: '', shadow: 4, aria: '' });
+          W = T.w / 2; fg = T.t.fg; padL = T.kind === 'vec' ? 17 : 0;
+          html_ = { kind: T.kind, t: T.t, w: T.w };
+        }
+        W = Math.max(W, tw + 8);
+        return { t: t, w: tw, tile: tile, on: on, width: on ? W : tw, W: W, padL: padL, fg: fg, mini: html_ };
+      });
+      return { key: key, title: title, y: y, on: on, tokens: tokens, toggle: () => this.setState({ tiles: Object.assign({}, this.state.tiles, { [key]: !on }) }) };
+    };
+    return [build('assume', 'ASSUMPTIONS', K.AY, assume), build('goal', 'GOAL', K.GY, goal)];
+  }
+  // [text, tile] pairs for a small expression tree (the goal): each scalar and vector gets its tile
+  nodeTokens(n) {
+    if (!n) return [];
+    if (n.t === 's' || n.t === 'v') return [[this.elText(n), { kind: 'node', node: n }]];
+    if (n.t === 'sum') return [['(']].concat(...n.terms.map((t, i) => (i ? [[' + ']] : []).concat(this.nodeTokens(t.node))), [[')']]);
+    return [].concat(...n.factors.map((f, i) => (i ? [['·']] : []).concat(this.nodeTokens(f))), n.vec ? this.nodeTokens(n.vec) : []);
   }
   // The dotted box around the expression: it hugs the expression's tiles (growing and shrinking as they move, so it
   // shows when part of the expression is off screen) and always holds the EXPRESSION heading and the readout under it.
@@ -1154,6 +1330,30 @@ export class Range extends Component {
       box.t = Math.min(box.t, p.y - 24); box.b = Math.max(box.b, p.y + p.h + 24);
     });
     return box;
+  }
+  // One header block (ASSUMPTIONS or GOAL): its title, then its tokens on one line. A token with a tile has a fixed
+  // box whose width animates between its text's and its tile's; the tile pops up behind the text after the slide
+  // (and shrinks first when switching back).
+  headHtml(h, won) {
+    const title = h.key === 'goal' && won ? '#F2B33D' : '#94A3B8';
+    return html`
+    <div onClick=${h.toggle} role="button" aria-pressed=${h.on ? 'true' : 'false'} aria-label=${h.title + ': tap to show or hide the tiles'} style=${`position: absolute; left: 14px; top: ${h.y}px; padding: 0 14px; min-width: 260px; pointer-events: auto; cursor: pointer; z-index: 5`}>
+      <div style=${`font-family: Inter, system-ui, sans-serif; font-size: 14px; font-weight: 700; letter-spacing: 0.12em; color: ${title}`}>${h.title}</div>
+      <div style="position: relative; height: 58px; margin-top: 10px; display: flex; white-space: pre; font-family: 'STIX Two Text', 'Cambria Math', 'Times New Roman', serif; font-size: 24px; color: #E2E8F0">
+        ${h.tokens.map(k => !k.tile ? html`<span style="flex: 0 0 auto; padding-top: 14px; height: 30px; line-height: 30px">${k.t}</span>` : html`
+          <span style=${`position: relative; flex: 0 0 auto; height: 58px; width: ${k.width}px; transition: width 0.35s ease ${k.on ? '0s' : '0.2s'}`}>
+            <span style=${`position: absolute; left: 0; top: 0; width: 100%; height: 100%; transform: scale(${k.on ? 1 : 0}); transform-origin: 50% 40%; transition: transform 0.32s cubic-bezier(0.2, 1.5, 0.4, 1) ${k.on ? '0.22s' : '0s'}; pointer-events: none`}>
+              ${k.tile.kind === 'para' ? html`
+                <span style=${`position: absolute; left: ${(k.W - 46) / 2}px; top: 17px; width: 46px; height: 30px; clip-path: polygon(0 0, 30px 0, 45.9px 100%, 15.9px 100%); background: ${k.tile.lip}`}></span>
+                <span style=${`position: absolute; left: ${(k.W - 46) / 2}px; top: 14px; width: 46px; height: 30px; clip-path: polygon(0 0, 30px 0, 45.9px 100%, 15.9px 100%); background: ${k.tile.bg}`}></span>
+              ` : html`
+                <span style=${`position: absolute; left: ${(k.W - k.mini.w) / 2}px; top: -22px; width: ${k.mini.w}px; height: 88px; transform: scale(0.5); transform-origin: 50% 50%`}>${k.mini.kind === 'vec' ? this.vecHtml(k.mini.t) : this.hexHtml(k.mini.t)}</span>
+              `}
+            </span>
+            <span style=${`position: absolute; left: 0; right: 0; top: 14px; height: 30px; box-sizing: border-box; display: flex; align-items: center; justify-content: center; padding-left: ${k.on ? k.padL : 0}px; color: ${k.on ? k.fg : 'inherit'}; transition: padding 0.35s ease, color 0.3s ease; z-index: 1`}>${k.t}</span>
+          </span>`)}
+      </div>
+    </div>`;
   }
   /* ---------- render ---------- */
   vecHtml(t) {
@@ -1213,6 +1413,26 @@ export class Range extends Component {
       results.push(Object.assign({ x: 28, y: this.K.ZT + 34, main: main, segs: segs, note: ro.ok ? '' : 'terms in the expression need the same type' }, ro.ok ? green : red));
     }
     Object.assign(zb, this.zoneBox(results[0]));
+    // Level complete: the expression is exactly the goal. The expression's tiles hop with a few sparks, the box and
+    // the readout turn gold. (What happens next comes later.)
+    const zoneTop = this.zoneIds.length === 1 ? St.tops.find(t => t.node.id === this.zoneIds[0]) : null;
+    const won = !this.props.legacy && !!St.goal && !(this.drag && this.drag.moved) && !!zoneTop && this.canon(zoneTop.node) === this.canon(St.goal);
+    this._won = won;
+    const sparks = [];
+    if (won) {
+      const inZone = new Set(this.ids(zoneTop.node)); let k = 0;
+      R.vecs.concat(R.hexes).forEach(t => {
+        if (!inZone.has(t.id)) return;
+        t.anim = 'winHop 0.9s ease-in-out ' + (0.1 * k) + 's 2 both';
+        const p = this.P.get(t.id);
+        for (let i = 0; i < 8; i++) {
+          const a = (i / 8) * Math.PI * 2 + k;
+          sparks.push({ x: p.x + p.w / 2 - 5, y: p.y + p.h / 2 - 5, sx: Math.cos(a) * (70 + 20 * (i % 2)), sy: Math.sin(a) * (60 + 20 * (i % 2)), delay: 0.25 + 0.1 * k + 0.03 * i });
+        }
+        k++;
+      });
+      if (results[0]) Object.assign(results[0], { bg: 'rgba(242,179,61,0.18)', border: '#F2B33D', fg: '#FDE68A', note: 'goal reached' });
+    }
     const ghosts = [];
     const HEXC = 'polygon(22px 0, calc(100% - 22px) 0, 100% 50%, calc(100% - 22px) 100%, 22px 100%, 0 50%)';
     if (St.preview && St.preview.type === 'expandV' && this.drag) {
@@ -1263,7 +1483,8 @@ export class Range extends Component {
       zoomReset: () => this.setState({ zoom: 1, panX: 0, panY: 0 }), showReset: Math.abs(St.zoom - 1) > 0.01 || St.panX !== 0 || St.panY !== 0, zoomPct: Math.round(St.zoom * 100),
       zoneL: zb.l, zoneW: zb.r - zb.l, zoneT: zb.t, zoneH: zb.b - zb.t,
       ghosts: ghosts, groups: R.groups, pluses: R.pluses,
-      vecs: R.vecs.concat(this.props.legacy || zDrag ? [zeroTile] : []), hexes: R.hexes.concat(this.props.legacy || zsDrag ? [zeroHex] : []),
+      vecs: R.vecs.concat(this.props.legacy || zDrag ? [zeroTile] : [], this.draggedItem('vec')), hexes: R.hexes.concat(this.props.legacy || zsDrag ? [zeroHex] : [], this.draggedItem('hex')),
+      heads: this.props.legacy ? null : this.headVals(), won: won, sparks: sparks, exprY: this.K.ZT + 10,
       tray: this.props.legacy ? null : this.trayVals(zs, zp, zeroHex, zeroTile), dots: R.dots, strips: strips,
       parenSrc: ps ? { x: ps.x, y: ps.y, z: this.pdrag && this.pdrag.id === ps.id ? 990 : 5, op: rules ? 0.3 : 1, pe: rules ? 'none' : 'auto', down: this.pieceDown(ps) } : null,
       legacy: !!this.props.legacy, trayH: this.props.legacy ? 414 : 190,
@@ -1289,8 +1510,10 @@ export class Range extends Component {
     <div onPointerDown=${v.panDown} aria-hidden="true" style="position: absolute; left: -4020px; top: -4020px; width: 9000px; height: 9000px; touch-action: none; cursor: grab; background-image: radial-gradient(rgba(148,163,184,0.22) 1.4px, transparent 2px); background-size: 30px 30px"></div>
 
 
-    <div style=${`position: absolute; left: ${v.zoneL}px; top: ${v.zoneT}px; width: ${v.zoneW}px; height: ${v.zoneH}px; box-sizing: border-box; border-radius: 24px; border: 2px dashed rgba(148,163,184,0.28); pointer-events: none; transition: left 0.2s ease, top 0.2s ease, width 0.2s ease, height 0.2s ease`}></div>
-    <div style="position: absolute; left: 28px; top: 136px; font-family: Inter, system-ui, sans-serif; font-size: 14px; font-weight: 700; letter-spacing: 0.12em; color: #94A3B8; pointer-events: none">EXPRESSION</div>
+    <div style=${`position: absolute; left: ${v.zoneL}px; top: ${v.zoneT}px; width: ${v.zoneW}px; height: ${v.zoneH}px; box-sizing: border-box; border-radius: 24px; border: 2px dashed rgba(148,163,184,0.28); pointer-events: none; transition: left 0.2s ease, top 0.2s ease, width 0.2s ease, height 0.2s ease; animation: ${v.won ? 'winBox 1.6s ease-out both' : 'none'}`}></div>
+    <div style=${`position: absolute; left: 28px; top: ${v.exprY}px; font-family: Inter, system-ui, sans-serif; font-size: 14px; font-weight: 700; letter-spacing: 0.12em; color: ${v.won ? '#F2B33D' : '#94A3B8'}; pointer-events: none`}>EXPRESSION</div>
+    ${(v.heads || []).map(h => this.headHtml(h, v.won))}
+    ${v.sparks.map(k => html`<div aria-hidden="true" style=${`position: absolute; left: ${k.x}px; top: ${k.y}px; width: 10px; height: 10px; border-radius: 2px; background: #FDE68A; box-shadow: 0 0 8px rgba(253,230,138,0.9); transform: rotate(45deg); z-index: 970; pointer-events: none; --sx: ${k.sx}px; --sy: ${k.sy}px; animation: spark 0.9s ease-out ${k.delay}s both`}></div>`)}
     ${v.legacy ? html`<div style=${`position: absolute; left: 10px; top: 546px; width: 540px; height: ${v.trayH}px; box-sizing: border-box; border-radius: 24px; border: 2px dashed rgba(148,163,184,0.28); background: rgba(255,255,255,0.02); opacity: ${v.trayOp}; pointer-events: none`}></div>
     <div style="position: absolute; left: 28px; top: 556px; font-family: Inter, system-ui, sans-serif; font-size: 14px; font-weight: 700; letter-spacing: 0.12em; color: #94A3B8; pointer-events: none">TRAY</div>` : null}
     ${v.legacy ? html`<div style="position: absolute; left: 150px; right: 30px; top: 553px; font-size: 18px; color: #CBD5E1; text-align: right; pointer-events: none">𝑈: the plane 𝑥 − 2𝑦 + 𝑧 = 0 in ℝ³</div>` : null}
@@ -1374,8 +1597,8 @@ export class Range extends Component {
         </div>
         ${v.tray.tab === 'tray' ? html`
           <div style="position: absolute; left: 0; right: 0; top: 0; bottom: 0; pointer-events: none">
-            <div style="pointer-events: auto">${this.hexHtml(v.tray.tiles.hex)}${this.vecHtml(v.tray.tiles.vec)}</div>
-            <div style="position: absolute; left: 290px; right: 20px; top: 96px; font-size: 15px; line-height: 21px; color: #94A3B8">Drag a 0 onto a term, or a sum’s right bracket, to add + 0.</div>
+            <div style="pointer-events: auto">${v.tray.list.map(x => x.kind === 'hex' ? this.hexHtml(x.t) : this.vecHtml(x.t))}</div>
+            <div style=${`position: absolute; left: 22px; right: 20px; top: ${v.tray.captionY}px; font-size: 14px; line-height: 19px; color: #94A3B8`}>Tap a tile on the board to bring it and its inverse here · drag a 0 onto a term to add + 0 · drag a tile onto a matching 0 to split the 0</div>
           </div>
         ` : html`
           <div style="padding: 40px 24px; font-size: 17px; color: #94A3B8">Nothing here yet.</div>

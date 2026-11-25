@@ -331,8 +331,8 @@ test('the 0 tile in ℝ: centred on a scalar it adds; beside it, it still docks;
 });
 
 // the board as it ships: Rules mode, only the two zeros in the tray
-function makeLive() {
-  const c = new Range({});
+function makeLive(props = { demo: true }) {
+  const c = new Range(props);
   c.setState = function (o) { Object.assign(this.state, typeof o === 'function' ? o(this.state) : o); };
   c.renderVals();
   return c;
@@ -421,9 +421,9 @@ test('factoring a scalar: 2·0 has the 2 and groups in, a bare 0 stays out', () 
   const c = makeLive();
   const V = () => c.mkV('𝑉', '𝑣', 'v', 'R', 140), Z = () => c.mkV('𝑉', '0', 'zero', 'R', 110), two = () => c.mkS('R', '2', '2');
   c.setState({ tops: [
-    { node: c.mkProd([two()], V()), x: 24, y: 164 },
-    { node: c.mkProd([two()], Z()), x: 250, y: 164 },
-    { node: Z(), x: 24, y: 352 },
+    { node: c.mkProd([two()], V()), x: 24, y: c.K.ZT + 110 },
+    { node: c.mkProd([two()], Z()), x: 250, y: c.K.ZT + 110 },
+    { node: Z(), x: 24, y: c.K.ZT + 250 },
   ] });
   c.renderVals();
   const a = c.state.tops[0].node.factors[0], b = c.state.tops[1].node.factors[0];
@@ -478,7 +478,7 @@ test('absorbing the 0 out of a two-term bracket drops the bracket: ½·(𝑣 + 0
   const c = makeLive();
   const v = c.mkV('𝑉', '𝑣', 'v', 'R', 140), z = c.mkV('𝑉', '0', 'zero', 'R', 110);
   const S = c.mkSum([{ node: v, x: 0, y: 0 }, { node: z, x: 0, y: 0 }]); c.rowArrange(S);
-  c.setState({ tops: [{ node: c.mkProd([c.mkS('R', '½', '½')], S), x: 24, y: 200 }] });
+  c.setState({ tops: [{ node: c.mkProd([c.mkS('R', '½', '½')], S), x: 24, y: c.K.ZT + 110 }] });
   dragTo(c, z.id, ...centre(c, v.id));
   assert.deepEqual(readout(c), ['½𝑣']);
 });
@@ -524,4 +524,92 @@ test('the expression box hugs its tiles and always holds the heading and readout
   assert.ok(v.zoneL < -300, 'grew to the left');
   assert.ok(inBox(v, head.l, head.t + 10) && inBox(v, 28 + 200, c.K.ZT + 60), 'heading and readout still inside');
   assert.ok(v.zoneL + v.zoneW < r0 + 250, 'and shrank back on the right');
+});
+
+// level 1, as it ships
+const makeLevel = () => makeLive({});
+const tap = (c, id) => { c.renderVals(); c.begin(id, 'self', ev(0, 0)); c.end(); c.renderVals(); };
+function dragItem(c, n, tx, ty) {
+  const v = c.renderVals(); const t = v.tray.list.filter(x => x.t.el === n)[0].t;
+  t.down(ev(0, 0)); const d = c.idrag; const m = c.measure(d.node);
+  const dx = tx - (d.ox + m.w / 2), dy = ty - (d.oy + 44);
+  c.imove(ev(dx / 2, dy / 2)); c.renderVals(); c.imove(ev(dx, dy)); c.renderVals();
+  const hover = c.state.zeroHover; c.iend(); c.renderVals(); return hover;
+}
+
+test('level 1: goal 0 in 𝑉, start 0·𝑣, with ASSUMPTIONS and GOAL above the expression', () => {
+  const c = makeLevel();
+  const v = c.renderVals();
+  assert.deepEqual(readout(c), ['0𝑣']);
+  assert.deepEqual(v.heads.map(h => h.title), ['ASSUMPTIONS', 'GOAL']);
+  assert.equal(v.heads[0].tokens.map(k => k.t).join(''), '{𝑉 : Type}   [VectorSpace ℝ 𝑉]   (𝑣 : 𝑉)');
+  assert.deepEqual(v.heads[0].tokens.filter(k => k.tile).map(k => k.t + ':' + k.tile.kind), ['𝑉:para', 'ℝ:para', '𝑣:node']);
+  assert.equal(v.heads[1].tokens.map(k => k.t).join(''), '0');
+  assert.ok(v.heads.every(h => h.on), 'tiles shown at first');
+  assert.ok(v.heads[1].y + 82 < c.K.ZT && v.heads[0].y + 82 < v.heads[1].y, 'stacked above the expression without overlapping');
+  assert.equal(v.won, false);
+});
+
+test('tapping a header switches its tiles off and on (the token widths animate between text and tile)', () => {
+  const c = makeLevel();
+  let h = c.renderVals().heads[0];
+  const vTok = () => c.renderVals().heads[0].tokens.find(k => k.t === '𝑣');
+  assert.equal(vTok().width, vTok().W);
+  h.toggle();
+  assert.equal(c.renderVals().heads[0].on, false);
+  assert.equal(vTok().width, vTok().w, 'back to the text width');
+  c.renderVals().heads[0].toggle();
+  assert.equal(vTok().width, vTok().W);
+});
+
+test('tapping a tile puts it and its inverse in the tray (once), opening the tray with the new ones popping in', () => {
+  const c = makeLevel();
+  const T = c.state.tops[0].node;
+  tap(c, T.vec.id);
+  let v = c.renderVals();
+  assert.equal(v.tray.show, true);
+  assert.deepEqual(c.state.trayItems.map(it => c.elText(it.node)), ['𝑣', '−𝑣']);
+  assert.ok(v.tray.list.slice(2).every(x => x.t.anim.startsWith('trayPop')), 'new items pop in');
+  tap(c, T.vec.id);
+  assert.equal(c.state.trayItems.length, 2, 'not added twice');
+  tap(c, T.factors[0].id);                       // the scalar 0 is its own inverse
+  assert.deepEqual(c.state.trayItems.map(it => c.elText(it.node)), ['𝑣', '−𝑣', '0']);
+});
+
+test('a tray tile dropped on a 0 of its type splits it: 0·𝑣 with 2 → (2 + −2)𝑣, sliding out from the drop', () => {
+  const c = makeLevel();
+  c.state.trayItems = [{ id: 'T1', node: c.mkS('R', '2', '2') }, { id: 'T2', node: c.mkS('R', '−2', '-2') }];
+  const z = c.state.tops[0].node.factors[0];
+  // a vector won't split a scalar 0
+  c.state.trayItems.push({ id: 'T3', node: c.mkV('𝑉', '𝑣', 'v', 'R', 140) });
+  assert.equal(dragItem(c, '𝑣', ...centre(c, z.id)), null);
+  const hover = dragItem(c, '2', ...centre(c, z.id));
+  assert.equal(hover.id, z.id, 'the 0 glowed');
+  assert.deepEqual(readout(c), ['(2 + −2)𝑣']);
+  const S = c.state.tops[0].node.factors[0];
+  const [a, b] = S.terms.map(t => t.node);
+  assert.ok(c.state.slides[a.id].top && c.state.slides[b.id] && !c.state.slides[b.id].top, 'both slide out, the inverse underneath');
+  assert.equal(b.el, '−2'); assert.equal(c.renderVals().hexes.find(h => h.el === '−2').face, '#3B2C12', 'a night tile');
+});
+
+test('splitting a vector 0 in the expression: … + 0 → … + 𝑣 + −𝑣', () => {
+  const c = makeLevel();
+  dragPiece(c, 'PZ', ...centre(c, c.state.tops[0].node.vec.id)); // 0𝑣 + 0
+  tap(c, c.state.tops[0].node.vec.id);
+  const z = c.state.tops.find(t => t.node.key === 'zero').node;
+  dragItem(c, '𝑣', ...centre(c, z.id));
+  assert.deepEqual(readout(c), ['0𝑣 + 𝑣 + −𝑣']);
+});
+
+test('reaching the goal plays the win: the expression is exactly 0 in 𝑉', () => {
+  const c = makeLevel();
+  c.setState({ tops: [{ node: c.mkV('𝑉', '0', 'zero', 'R', 110), x: 24, y: c.K.ZT + 110 }] });
+  const v = c.renderVals();
+  assert.equal(v.won, true);
+  assert.ok(v.vecs.find(t => t.el === '0').anim.startsWith('winHop'), 'the tile hops');
+  assert.equal(v.sparks.length, 8);
+  assert.equal(v.results[0].note, 'goal reached');
+  // a scalar 0 is not the goal
+  c.setState({ tops: [{ node: c.mkS('R', '0', '0'), x: 24, y: c.K.ZT + 110 }] });
+  assert.equal(c.renderVals().won, false);
 });

@@ -19,3 +19,24 @@ button { font-family: inherit; }
   0%, 100% { color: inherit; text-shadow: 0 0 0 rgba(253, 230, 138, 0); }
   50% { color: #FDE68A; text-shadow: 0 0 8px rgba(253, 230, 138, 0.75); }
 }
+@keyframes trayPop {
+  0% { scale: 0; opacity: 0; }
+  60% { opacity: 1; }
+  100% { scale: 1; opacity: 1; }
+}
+@keyframes winHop {
+  0%, 100% { translate: 0 0; filter: drop-shadow(0 7px 12px rgba(0,0,0,0.4)); }
+  30% { translate: 0 -22px; filter: drop-shadow(0 0 16px rgba(253,230,138,0.95)); }
+  55% { translate: 0 0; }
+  72% { translate: 0 -8px; filter: drop-shadow(0 0 10px rgba(253,230,138,0.7)); }
+}
+@keyframes winBox {
+  0% { border-color: rgba(148,163,184,0.28); box-shadow: 0 0 0 rgba(242,179,61,0); }
+  35% { border-color: #FDE68A; box-shadow: 0 0 28px rgba(253,230,138,0.55); }
+  100% { border-color: #F2B33D; box-shadow: 0 0 12px rgba(242,179,61,0.3); }
+}
+@keyframes spark {
+  0% { translate: 0 0; opacity: 0; scale: 0.4; }
+  20% { opacity: 1; scale: 1; }
+  100% { translate: var(--sx) var(--sy); opacity: 0; scale: 0.3; }
+}
