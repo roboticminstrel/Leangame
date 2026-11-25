@@ -43,6 +43,7 @@ export class Range extends Component {
       // taps. Level 1 (Axler 1.30): from 0·𝑣 reach the zero vector. props.demo: the earlier (2 + 3)𝑣 + −1𝑣 (tests).
       const Y = this.K.ZT + 110;
       const level = this.props.level || this.prog.current;
+      if (!this.props.demo) this.layoutFor(level);
       const L = this.loadLevel(level);
       const tops = this.props.demo
         ? [{ node: this.mkProd([g], this.mkV('𝑉', '𝑣', 'v', 'R', 140)), x: 24, y: Y },
@@ -51,7 +52,7 @@ export class Range extends Component {
       this.hist = this.props.demo ? { entries: [{ tops: this.clone(tops), steps: [] }], idx: 0 } : L.hist;
       return Object.assign(base, {
         rules: true, trayOpen: false, trayTab: 'tray', trayItems: [], trayNew: {}, slides: {}, tiles: { assume: true, goal: true },
-        level: level, goal: this.props.demo ? this.mkV('𝑉', '0', 'zero', 'R', 110) : L.goal,
+        level: level, goal: this.props.demo ? this.mkV('𝑉', '0', 'zero', 'R', 110) : L.goal, hyps: this.props.demo ? [] : L.hyps, vars: this.props.demo ? null : L.vars,
         tops: tops,
         pieces: [
           { id: 'PZS', kind: 'zeroS', x: 30, y: 600, hx: 30, hy: 600 },
@@ -88,7 +89,7 @@ export class Range extends Component {
     if (n.t === 's') { const v = String(n.val); return /^-?\d+$/.test(v) ? { n: parseInt(v, 10) } : null; }
     if (n.t === 'v') {
       if (n.key === 'zero') return { zero: true };
-      if (!/^[a-z]$/.test(n.key || '')) return null;
+      if (!/^[a-z][0-9]?$/.test(n.key || '')) return null; // the server's names: a letter, maybe a digit (𝑤′ is w2)
       return n.neg ? { neg: { v: n.key } } : { v: n.key };
     }
     let core;
@@ -115,7 +116,8 @@ export class Range extends Component {
     trees.forEach(x => {
       if (!inG.has(x.id)) { out.push(x.t); return; }
       if (placed) return; placed = true;
-      out.push({ [op]: g.parts.map(ids => { const ts = ids.map(id => (trees.find(y => y.id === id) || {}).t); return ts.length === 1 ? ts[0] : { [op]: ts }; }) });
+      const parts = g.parts.map(ids => { const ts = ids.map(id => (trees.find(y => y.id === id) || {}).t); return ts.length === 1 ? ts[0] : { [op]: ts }; });
+      out.push(parts.length === 1 ? parts[0] : { [op]: parts });
     });
     return out;
   }
@@ -130,19 +132,28 @@ export class Range extends Component {
     const pos = n => this.P.get(n.id) || { x: 0, y: 0 };
     return ns.slice().sort((a, b) => Math.abs(pos(a).y - pos(b).y) > 60 ? pos(a).y - pos(b).y : pos(a).x - pos(b).x);
   }
+  leanList(ns) { const ts = ns.map(n => this.leanTree(n)); return ts.length === 1 ? ts[0] : { add: ts }; }
+  leanHyps() { return (this.state.hyps || []).map(h => [this.leanList(h.lhs), this.leanList(h.rhs)]); }
   zoneTree() { return this.leanSum(this.state.tops.filter(t => this.zoneIds.indexOf(t.node.id) >= 0).map(t => t.node), 'zone'); }
   // ---------- levels: a level's place is its move history (each entry the board after a move, with the Lean steps
   // that move sent) and where in it the player is ----------
+  // the header's height depends on the level: a line for its vectors and one for its hypotheses, when it has them
+  layoutFor(id) {
+    const L = LEVELS[id] || LEVELS['1.30']; const b = L.build(this);
+    const extra = ((b.vars ? 1 : 0) + (b.hyps && b.hyps.length ? 1 : 0)) * 58;
+    Object.assign(this.K, { AY: 84, GY: 192 + extra, ZT: 300 + extra, ZB: 700 + extra });
+  }
   loadLevel(id) {
     const L = LEVELS[id] || LEVELS['1.30'];
     const b = L.build(this);
+    const extra = { goal: b.goal, hyps: b.hyps || [], vars: b.vars || null };
     const place = this.prog.places[L.id];
     if (place && place.entries && place.entries[place.idx]) {
       this.bumpUid(place.entries);
-      return { goal: b.goal, tops: this.clone(place.entries[place.idx].tops), hist: { entries: place.entries, idx: place.idx } };
+      return Object.assign(extra, { tops: this.clone(place.entries[place.idx].tops), hist: { entries: place.entries, idx: place.idx } });
     }
     const tops = b.start.map((n, i) => ({ node: n, x: 24 + i * 200, y: this.K.ZT + 110 }));
-    return { goal: b.goal, tops: tops, hist: { entries: [{ tops: this.clone(tops), steps: [] }], idx: 0 } };
+    return Object.assign(extra, { tops: tops, hist: { entries: [{ tops: this.clone(tops), steps: [] }], idx: 0 } });
   }
   // ids loaded from storage must not collide with new ones
   bumpUid(x) { const m = JSON.stringify(x).match(/"id":"[a-zA-Z]+(\d+)"/g) || []; m.forEach(t => { const k = parseInt(t.replace(/\D/g, ''), 10); if (k >= this.uid) this.uid = k + 1; }); }
@@ -157,9 +168,10 @@ export class Range extends Component {
   switchLevel(id) {
     if (!LEVELS[id]) return;
     this.savePlace();
+    this.layoutFor(id);
     const L = this.loadLevel(id);
     this.hist = L.hist; this._histKey = null; this._resync = true;
-    this.setState({ level: id, goal: L.goal, tops: this.normTops(this.tidy(L.tops)), tree: null, trayClosing: true, histAnim: true, zeroHover: null, preview: null });
+    this.setState({ level: id, goal: L.goal, hyps: L.hyps, vars: L.vars, tops: this.normTops(this.tidy(L.tops)), tree: null, trayClosing: true, histAnim: true, zeroHover: null, preview: null });
     clearTimeout(this._tc); this._tc = setTimeout(() => this.setState({ trayOpen: false, trayClosing: false, trayTab: 'tray' }), 220);
     clearTimeout(this._ha); this._ha = setTimeout(() => this.setState({ histAnim: false }), 450);
     this.prog.current = id; this.store.save(this.prog);
@@ -251,7 +263,7 @@ export class Range extends Component {
       this.checkWin();
     }
     if (L) {
-      if (R && R.restart) L.setLevel(t, this.leanTree(this.state.goal));
+      if (R && R.restart) L.setLevel(t, this.leanTree(this.state.goal), this.leanHyps());
       else steps.forEach(st => L.boardChanged(st[0], st[1], st[2]));
     }
     this.savePlace();
@@ -269,7 +281,7 @@ export class Range extends Component {
     this._leanTree = this.zoneTree(); this._histKey = this.histKey();
     const L = this.props.lean; if (!L) return;
     const H = this.hist; const first = H.idx > 0 && H.entries[1].steps[0];
-    L.setLevel(first ? first[0] : this._leanTree, this.leanTree(this.state.goal));
+    L.setLevel(first ? first[0] : this._leanTree, this.leanTree(this.state.goal), this.leanHyps());
     for (let i = 1; i <= H.idx; i++) H.entries[i].steps.forEach(st => L.boardChanged(st[0], st[1], st[2]));
   }
   componentDidMount() {
@@ -280,7 +292,7 @@ export class Range extends Component {
     this._rs();
     window.addEventListener('resize', this._rs);
     this.ptrs = new Map();
-    this._mv = e => { if (this.ptrs.has(e.pointerId)) this.ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY }); if (this.pinch) this.pinchMove(); else if (this.drag) this.move(e); else if (this.pdrag) this.pmove(e); else if (this.idrag) this.imove(e); else if (this.panning) this.panMove(e); };
+    this._mv = e => { if (this.ptrs.has(e.pointerId)) this.ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY }); if (this.pinch) this.pinchMove(); else if (this.drag) this.move(e); else if (this.pdrag) this.pmove(e); else if (this.idrag) this.imove(e); else if (this.hdrag) this.hmove(e); else if (this.panning) this.panMove(e); };
     this._up = e => {
       if (e && this.ptrs.has(e.pointerId)) {
         this.ptrs.delete(e.pointerId);
@@ -291,9 +303,9 @@ export class Range extends Component {
           return;
         }
         if (!this.ptrs.size) this.panning = null;
-        if (!this.drag && !this.pdrag && !this.idrag) return;
+        if (!this.drag && !this.pdrag && !this.idrag && !this.hdrag) return;
       }
-      if (this.drag) this.end(); else if (this.pdrag) this.pend(); else if (this.idrag) this.iend(); else if (this.panning) this.panning = null; else if (this.state.holding) this.setState({ holding: null });
+      if (this.drag) this.end(); else if (this.pdrag) this.pend(); else if (this.idrag) this.iend(); else if (this.hdrag) this.hend(); else if (this.panning) this.panning = null; else if (this.state.holding) this.setState({ holding: null });
     };
     window.addEventListener('pointermove', this._mv);
     window.addEventListener('pointerup', this._up);
@@ -1467,6 +1479,74 @@ export class Range extends Component {
     }
     return { a: a, b: b, key: key, op: 'add' };
   }
+  // ---------- hypotheses (a level's h : l = r): drag the card onto a run matching either side; it becomes the other ----------
+  // the sum (or the expression) a tile belongs to, and its term there: the deepest bracket holding it, else the expression
+  memberOf(tops, id) {
+    let best = null;
+    tops.forEach(t => this.walk(t.node, n => {
+      if (n.t !== 'sum' || this.flagged(n)) return;
+      n.terms.forEach(u => { if (this.ids(u.node).indexOf(id) >= 0) { const d = (this.P.get(n.id) || {}).depth || 0; if (!best || d >= best.d) best = { d: d, key: n.id, member: u.node, list: n.terms.map(x => x.node) }; } });
+    }, null, null));
+    if (best) return best;
+    const zt = tops.find(t => this.zoneIds.indexOf(t.node.id) >= 0 && this.ids(t.node).indexOf(id) >= 0);
+    return zt ? { key: 'zone', member: zt.node, list: tops.filter(t => this.zoneIds.indexOf(t.node.id) >= 0).map(t => t.node) } : null;
+  }
+  hypTarget(h, cx, cy) {
+    let tile = null;
+    this.state.tops.forEach(t => this.walk(t.node, n => {
+      if (n.t !== 's' && n.t !== 'v') return; const p = this.P.get(n.id);
+      if (this.inRect(p, cx, cy, 4) && (!tile || p.depth >= tile.depth)) tile = { id: n.id, depth: p.depth };
+    }, null, null));
+    if (!tile) return null;
+    const m = this.memberOf(this.state.tops, tile.id); if (!m) return null;
+    const chain = this.readingOrder(m.list, m.key); const at = chain.findIndex(x => x.id === m.member.id);
+    for (const [side, other, dir] of [[h.lhs, h.rhs, 'fwd'], [h.rhs, h.lhs, 'back']]) {
+      const k = side.length;
+      for (let w = Math.max(0, at - k + 1); w <= at && w + k <= chain.length; w++) {
+        const win = chain.slice(w, w + k);
+        if (win.every((x, i) => this.canon(x) === this.canon(side[i]))) {
+          return { id: win[0].id, glow: [].concat(...win.map(x => this.ids(x))), hyp: { key: m.key, ids: win.map(x => x.id), to: other, dir: dir, name: h.name, label: h.label } };
+        }
+      }
+    }
+    return null;
+  }
+  applyHyp(hit) {
+    const H = hit.hyp; const tops = this.clone(this.state.tops);
+    const list = H.key === 'zone' ? tops : this.locate(tops, H.key).node.terms;
+    const inChain = H.key === 'zone' ? (t => this.zoneIds.indexOf(t.node.id) >= 0) : (() => true);
+    const ents = H.ids.map(id => list.find(t => t.node.id === id));
+    const first = ents[0]; const i0 = list.indexOf(first);
+    const oldW = ents.reduce((a, t) => a + this.measure(t.node).w, 0) + this.K.GAP * (ents.length - 1);
+    const right = Math.max(...ents.map(t => t.x + this.measure(t.node).w));
+    const cy = first.y + this.measure(first.node).h / 2;
+    if (H.ids.length > 1) { this._leanGroup = { key: H.key, parts: [H.ids] }; this._leanMid = this.zoneTree(); this._leanGroup = null; }
+    const fresh = H.to.map(n => this.cloneFresh(n));
+    let x = first.x;
+    const added = fresh.map(n => { const m = this.measure(n); const e = { node: n, x: x, y: cy - m.h / 2 }; x += m.w + this.K.GAP; return e; });
+    const newW = x - this.K.GAP - first.x;
+    list.forEach(t => { if (ents.indexOf(t) < 0 && inChain(t) && t.x >= right - 1) t.x += newW - oldW; });
+    ents.forEach(t => list.splice(list.indexOf(t), 1));
+    list.splice(Math.min(i0, list.length), 0, ...added);
+    if (fresh.length > 1) this._splitGroup = { key: H.key, parts: [fresh.map(n => n.id)] };
+    this._hint = [H.name];
+    this.setState({ tops: this.normTops(tops) });
+    const side = ns => ns.map(n => this.label(n)).join(' + ');
+    this.flash(this.P.get(H.ids[0]), H.label + ': ' + side(H.dir === 'fwd' ? this.state.hyps.find(h => h.name === H.name).lhs : H.to) + ' = ' + side(H.dir === 'fwd' ? H.to : this.state.hyps.find(h => h.name === H.name).lhs), 'ok');
+  }
+  hmove(e) {
+    const d = this.hdrag; const w = this.worldDelta(e, d);
+    if (!d.moved && Math.abs(w.dx) + Math.abs(w.dy) < 8) return;
+    d.moved = true; d.x = d.fx + w.dx; d.y = d.fy + w.dy;
+    this.setState({ zeroHover: this.hypTarget(d.hyp, d.x, d.y), hdragAt: { x: d.x, y: d.y } });
+  }
+  hend() {
+    const d = this.hdrag; this.hdrag = null;
+    const hit = d.moved ? this.state.zeroHover : null;
+    this.setState({ zeroHover: null, hdragAt: null });
+    if (!d.moved) { this.flash({ x: 40, y: this.K.ZT }, 'Drag ' + d.hyp.label + ' onto either side of it on the board: that part becomes the other side', 'info'); return; }
+    if (hit && hit.hyp) this.applyHyp(hit);
+  }
   // a pointer event's position in board units
   fingerAt(e) {
     const U = this.unit(); const S = U.u * this.scaleNow();
@@ -1766,7 +1846,13 @@ export class Range extends Component {
     entries.forEach(en => { if (x > 22 && x + en.w > 528 - 18) { x = 22; y += 104; rows++; } en.px = x; en.py = y; x += en.w + 14; });
     const bottom = 84; const room = (St.bh || 716) / this.fitScale() - bottom - 140;
     const TV = St.tree ? this.treeVals(St.tree.root) : null;
-    const treeTop = 64 + rows * 104;
+    const hypsY = 64 + rows * 104;
+    const hyps = (St.hyps || []).map((h, i) => {
+      const text = h.label + ' : ' + h.lhs.map(n => this.label(n)).join(' + ') + ' = ' + h.rhs.map(n => this.label(n)).join(' + ');
+      return { text: text, x: 22 + i * 252, y: hypsY,
+        down: e => { stop(e); const f = this.fingerAt(e); this.hdrag = { hyp: h, sx: e.clientX, sy: e.clientY, fx: f.x, fy: f.y, x: f.x, y: f.y, moved: false, text: text }; } };
+    });
+    const treeTop = hypsY + (hyps.length ? 64 : 0);
     const sc = TV ? Math.min(1, 488 / TV.w, Math.max(0.35, (room - treeTop - 50) / TV.h)) : 1;
     const full = (St.bh || 716) / this.fitScale();
     const tools = St.trayTab === 'tools';
@@ -1794,12 +1880,12 @@ export class Range extends Component {
         anim: fresh ? 'trayPop 0.5s cubic-bezier(0.2, 1.5, 0.4, 1) ' + St.trayNew[en.id] + 's both' : 'none',
         down: e => { stop(e); en.start(e, 16 + en.px, top + en.py); } });
     });
-    const dragging = (this.pdrag && this.pdrag.moved) || (this.idrag && this.idrag.moved);
+    const dragging = (this.pdrag && this.pdrag.moved) || (this.idrag && this.idrag.moved) || (this.hdrag && this.hdrag.moved);
     return {
       open: !!St.trayOpen, show: !!St.trayOpen && !dragging, tab: St.trayTab || 'tray', top: top, h: H, lean: this.leanVals(), tools: tools,
       // the concept graph's current node: back to the game (the panel slides away, the tray tab comes back next time)
       play: () => { this.setState({ trayClosing: true }); clearTimeout(this._tc); this._tc = setTimeout(() => this.setState({ trayOpen: false, trayClosing: false, trayTab: 'tray' }), 220); },
-      list: tiles.map((t, i) => ({ kind: entries[i].kind, t: t })), tiles: { hex: tiles[0], vec: tiles[1], one: po ? tiles[2] : null }, captionY: H - 34, tree: tree,
+      list: tiles.map((t, i) => ({ kind: entries[i].kind, t: t })), tiles: { hex: tiles[0], vec: tiles[1], one: po ? tiles[2] : null }, captionY: H - 34, tree: tree, hyps: hyps,
       closing: !!St.trayClosing,
       // open: the panel slides up; close: it slides back down first
       toggle: () => {
@@ -1829,12 +1915,21 @@ export class Range extends Component {
     const St = this.state; const K = this.K;
     const V = (bg, lip, fg) => ({ kind: 'para', bg: bg, lip: lip, fg: fg });
     const vT = V('#2F5BD3', '#1E3A8A', '#FFFFFF'), rT = V('#F2B33D', '#B7791F', '#2A1D04');
-    const v = this.mkV('𝑉', '𝑣', 'v', 'R', 140);
-    const assume = [['{'], ['𝑉', vT], [' : Type}   [VectorSpace '], ['ℝ', rT], [' '], ['𝑉', vT], [']   '], ['(𝑣 : 𝑉)', { kind: 'decl', name: '𝑣', type: '𝑉', node: v }]];
+    const decl = ([el, key]) => ['(' + el + ' : 𝑉)', { kind: 'decl', name: el, type: '𝑉', node: this.mkV('𝑉', el, key, 'R', 140) }];
+    const base = [['{'], ['𝑉', vT], [' : Type}   [VectorSpace '], ['ℝ', rT], [' '], ['𝑉', vT], [']']];
+    const rowsA = [];
+    if (St.vars) {
+      rowsA.push(base);
+      rowsA.push([].concat(...St.vars.map((x, i) => (i ? [['  ']] : []).concat([decl(x)]))));
+    } else rowsA.push(base.concat([['   '], decl(['𝑣', 'v'])]));
+    if (St.hyps && St.hyps.length) {
+      const side = ns => ns.map(n => this.elText(n)).join(' + ');
+      rowsA.push([].concat(...St.hyps.map((h, i) => (i ? [['   ']] : []).concat([['(' + h.label + ' : ' + side(h.lhs) + ' = ' + side(h.rhs) + ')']]))));
+    }
     const goal = this.nodeTokens(St.goal);
-    const build = (key, title, y, list) => {
+    const build = (key, title, y, rowsIn) => {
       const on = !!(St.tiles && St.tiles[key]);
-      const tokens = list.map(([t, tile]) => {
+      const mk = list => list.map(([t, tile]) => {
         const tw = this.textW(t);
         if (!tile) return { t: t, w: tw };
         let W, html_ = null, padL = 0, fg = '#16130C';
@@ -1864,9 +1959,10 @@ export class Range extends Component {
         W = Math.max(W, tw + 8);
         return { t: t, w: tw, tile: tile, on: on, width: on ? W : tw, W: W, padL: padL, fg: fg, mini: html_ };
       });
-      return { key: key, title: title, y: y, on: on, tokens: tokens, toggle: () => this.setState({ tiles: Object.assign({}, this.state.tiles, { [key]: !on }) }) };
+      const rows = rowsIn.map(mk);
+      return { key: key, title: title, y: y, on: on, rows: rows, tokens: [].concat(...rows), toggle: () => this.setState({ tiles: Object.assign({}, this.state.tiles, { [key]: !on }) }) };
     };
-    return [build('assume', 'ASSUMPTIONS', K.AY, assume), build('goal', 'GOAL · ' + (St.level || ''), K.GY, goal)];
+    return [build('assume', 'ASSUMPTIONS', K.AY, rowsA), build('goal', 'GOAL · ' + (St.level || ''), K.GY, [goal])];
   }
   // [text, tile] pairs for a small expression tree (the goal): each scalar and vector gets its tile
   nodeTokens(n) {
@@ -1908,8 +2004,8 @@ export class Range extends Component {
     return html`
     <div onClick=${h.toggle} role="button" aria-pressed=${h.on ? 'true' : 'false'} aria-label=${h.title + ': tap to show or hide the tiles'} style=${`position: absolute; left: 14px; top: ${h.y}px; padding: 0 14px; min-width: 260px; pointer-events: auto; cursor: pointer; z-index: 5`}>
       <div style=${`font-family: Inter, system-ui, sans-serif; font-size: 14px; font-weight: 700; letter-spacing: 0.12em; color: ${title}`}>${h.title}</div>
-      <div style="position: relative; height: 58px; margin-top: 10px; display: flex; white-space: pre; font-family: 'STIX Two Text', 'Cambria Math', 'Times New Roman', serif; font-size: 24px; color: #E2E8F0">
-        ${h.tokens.map(k => !k.tile ? html`<span style="flex: 0 0 auto; padding-top: 14px; height: 30px; line-height: 30px">${k.t}</span>` : html`
+      ${h.rows.map((row, ri) => html`<div style=${`position: relative; height: 58px; margin-top: ${ri ? 0 : 10}px; display: flex; white-space: pre; font-family: 'STIX Two Text', 'Cambria Math', 'Times New Roman', serif; font-size: 24px; color: #E2E8F0`}>
+        ${row.map(k => !k.tile ? html`<span style="flex: 0 0 auto; padding-top: 14px; height: 30px; line-height: 30px">${k.t}</span>` : html`
           <span style=${`position: relative; flex: 0 0 auto; height: 58px; width: ${k.width}px; transition: width 0.35s ease ${k.on ? '0s' : '0.2s'}`}>
             <span style=${`position: absolute; left: 0; top: 0; width: 100%; height: 100%; transform: scale(${k.on ? 1 : 0}); transform-origin: 50% 40%; transition: transform 0.32s cubic-bezier(0.2, 1.5, 0.4, 1) ${k.on ? '0.22s' : '0s'}; pointer-events: none`}>
               ${k.tile.kind === 'para' ? html`
@@ -1923,7 +2019,7 @@ export class Range extends Component {
               transition: left 0.35s ease ${k.on ? '0s' : '0.2s'}, transform 0.35s ease ${k.on ? '0s' : '0.2s'}, opacity 0.2s ease ${k.on ? '0s' : '0.25s'}, color 0.3s ease`}>${pt.s}</span>`) : html`
             <span style=${`position: absolute; left: 0; right: 0; top: 14px; height: 30px; box-sizing: border-box; display: flex; align-items: center; justify-content: center; padding-left: ${k.on ? k.padL : 0}px; color: ${k.on ? k.fg : 'inherit'}; transition: padding 0.35s ease, color 0.3s ease; z-index: 1`}>${k.t}</span>`}
           </span>`)}
-      </div>
+      </div>`)}
     </div>`;
   }
   // The Lean tab: a watch window on the live proof. The theorem as Lean has it, each board move as a step (✓ when Lean
@@ -2116,6 +2212,7 @@ export class Range extends Component {
       vecs: R.vecs.concat(this.props.legacy || zDrag ? [zeroTile] : [], this.draggedItem('vec')), hexes: R.hexes.concat(this.props.legacy || zsDrag ? [zeroHex] : [], poDrag ? [oneHex] : [], this.draggedItem('hex')),
       boxes: R.boxes,
       heads: this.props.legacy ? null : this.headVals(), won: won, sparks: sparks, exprY: this.K.ZT + 10,
+      hchip: this.hdrag && this.hdrag.moved ? { x: this.hdrag.x, y: this.hdrag.y, text: this.hdrag.text } : null,
       hist: this.props.legacy ? null : { canUndo: this.canUndo(), canRedo: this.canRedo(), undo: () => this.undo(), redo: () => this.redo(), rewind: () => this.rewind() },
       tray: this.props.legacy ? null : this.trayVals(zs, zp, zeroHex, zeroTile, po, oneHex), dots: R.dots, strips: strips,
       parenSrc: ps ? { x: ps.x, y: ps.y, z: this.pdrag && this.pdrag.id === ps.id ? 990 : 5, op: rules ? 0.3 : 1, pe: rules ? 'none' : 'auto', down: this.pieceDown(ps) } : null,
@@ -2145,6 +2242,7 @@ export class Range extends Component {
     <div style=${`position: absolute; left: ${v.zoneL}px; top: ${v.zoneT}px; width: ${v.zoneW}px; height: ${v.zoneH}px; box-sizing: border-box; border-radius: 24px; border: 2px dashed rgba(148,163,184,0.28); pointer-events: none; transition: left 0.2s ease, top 0.2s ease, width 0.2s ease, height 0.2s ease; animation: ${v.won ? 'winBox 1.6s ease-out both' : 'none'}`}></div>
     <div style=${`position: absolute; left: 28px; top: ${v.exprY}px; font-family: Inter, system-ui, sans-serif; font-size: 14px; font-weight: 700; letter-spacing: 0.12em; color: ${v.won ? '#F2B33D' : '#94A3B8'}; pointer-events: none`}>EXPRESSION</div>
     ${(v.heads || []).map(h => this.headHtml(h, v.won))}
+    ${v.hchip ? html`<div aria-hidden="true" style=${`position: absolute; left: ${v.hchip.x}px; top: ${v.hchip.y}px; transform: translate(-50%, -130%); padding: 10px 16px; border-radius: 14px; border: 1.5px solid #7DD3FC; background: rgba(14,116,144,0.85); color: #E0F2FE; font-family: 'STIX Two Text', serif; font-size: 21px; white-space: nowrap; z-index: 990; pointer-events: none; box-shadow: 0 8px 18px rgba(0,0,0,0.4)`}>${v.hchip.text}</div>` : null}
     ${v.sparks.map(k => html`<div aria-hidden="true" style=${`position: absolute; left: ${k.x}px; top: ${k.y}px; width: 10px; height: 10px; border-radius: 2px; background: #FDE68A; box-shadow: 0 0 8px rgba(253,230,138,0.9); transform: rotate(45deg); z-index: 970; pointer-events: none; --sx: ${k.sx}px; --sy: ${k.sy}px; animation: spark 0.9s ease-out ${k.delay}s both`}></div>`)}
     ${v.legacy ? html`<div style=${`position: absolute; left: 10px; top: 546px; width: 540px; height: ${v.trayH}px; box-sizing: border-box; border-radius: 24px; border: 2px dashed rgba(148,163,184,0.28); background: rgba(255,255,255,0.02); opacity: ${v.trayOp}; pointer-events: none`}></div>
     <div style="position: absolute; left: 28px; top: 556px; font-family: Inter, system-ui, sans-serif; font-size: 14px; font-weight: 700; letter-spacing: 0.12em; color: #94A3B8; pointer-events: none">TRAY</div>` : null}
@@ -2236,6 +2334,7 @@ export class Range extends Component {
         ${v.tray.tab === 'tray' ? html`
           <div style="position: absolute; left: 0; right: 0; top: 0; bottom: 0; pointer-events: none">
             <div style="pointer-events: auto">${v.tray.list.map(x => x.kind === 'hex' ? this.hexHtml(x.t) : this.vecHtml(x.t))}</div>
+            ${v.tray.hyps.map(h => html`<button onPointerDown=${h.down} aria-label=${'Hypothesis ' + h.text + ': drag it onto either side on the board'} style=${`position: absolute; left: ${h.x}px; top: ${h.y}px; height: 48px; padding: 0 16px; border-radius: 14px; border: 1.5px solid #7DD3FC; background: rgba(14,116,144,0.25); color: #E0F2FE; font-family: 'STIX Two Text', serif; font-size: 21px; white-space: nowrap; touch-action: none; cursor: grab; pointer-events: auto`}>${h.text}</button>`)}
             ${v.tray.tree ? this.treeHtml(v.tray.tree) : null}
             <div style=${`position: absolute; left: 22px; right: 20px; top: ${v.tray.captionY}px; font-size: 14px; line-height: 19px; color: #94A3B8`}>Tap a tile on the board to see its group as a tree · tap a tree node to negate or invert it · drag a node out onto a matching 0 (or 1) to split it</div>
           </div>

@@ -163,12 +163,19 @@ def tactic(rule):
     return "first\n    " + "\n    ".join("| " + t for t in tries)
 
 
-def _check(lhs, rhs):
-    """Check both trees (same sort, names used one way) and return the variable binders they need."""
+HYP = re.compile(r"^h[1-9]$")
+
+
+def _check(lhs, rhs, more=()):
+    """Check both trees (same sort, names used one way; and any further pairs, a level's hypotheses) and return the
+    variable binders they all need."""
     w = _Walk()
     a, b = w.sort(lhs), w.sort(rhs)
     if a != b:
         raise BadInput("one side is a scalar and the other a vector")
+    for l, r in more:
+        if w.sort(l) != w.sort(r):
+            raise BadInput("a hypothesis has a scalar on one side and a vector on the other")
     clash = w.scalars & w.vectors
     if clash:
         raise BadInput(f"{sorted(clash)[0]} is used as both a scalar and a vector")
@@ -187,14 +194,20 @@ def statement(lhs, rhs):
 
 # ---------- a live proof (the Lean tab): the level as a theorem, one board move per step ----------
 
-def theorem(start, goal, name="level1"):
-    """`theorem level1 … : start = goal := by` (the steps follow, one per line)."""
+def theorem(start, goal, name="level1", hyps=None):
+    """`theorem level1 … (h1 : l = r) … : start = goal := by` (the steps follow, one per line). hyps: a level's
+    hypotheses, as [lhs, rhs] pairs; in the proof they're h1, h2, …"""
     if not re.match(r"^[a-z][a-z0-9_]{0,30}$", name):
         raise BadInput("bad theorem name")
-    return f"theorem {name} {BINDERS}{_check(start, goal)} :\n    {term(start)} = {term(goal)} := by"
+    hyps = hyps or []
+    if not isinstance(hyps, list) or len(hyps) > 9 or any(not isinstance(h, list) or len(h) != 2 for h in hyps):
+        raise BadInput("hypotheses are up to nine [lhs, rhs] pairs")
+    binders = _check(start, goal, hyps)
+    hs = "".join(f" (h{i + 1} : {term(l)} = {term(r)})" for i, (l, r) in enumerate(hyps))
+    return f"theorem {name} {BINDERS}{binders}{hs} :\n    {term(start)} = {term(goal)} := by"
 
 
-def alternatives(rules):
+def alternatives(rules, lemmas=None):
     """Tactics that might prove one board move, in order: rearranging alone (ac_rfl), then each rule's lemmas both
     ways, at their first few matches, finishing with ac_rfl when the rewrite leaves the terms in another order."""
     tries = ["ac_rfl"]
@@ -202,7 +215,7 @@ def alternatives(rules):
         if rule == ARITH:
             tries.append("norm_num")
             continue
-        for lemma in RULES[rule]:
+        for lemma in (lemmas or RULES).get(rule, []):
             for arrow in ("", "← "):
                 for n in range(1, OCCURRENCES + 1):
                     rw = f"rw [{arrow}{lemma}]" if n == 1 else f"nth_rw {n} [{arrow}{lemma}]"
@@ -211,13 +224,17 @@ def alternatives(rules):
     return tries
 
 
-def step(frm, to, hint=None):
+def step(frm, to, hint=None, nhyps=0):
     """The tactic for one move in the live proof. The goal is `current = goal`; this proves `current = next` with the
-    move's rule (hint) or any rule, and leaves `next = goal`, closed at once when next is the goal itself."""
+    move's rule (hint) or any rule, and leaves `next = goal`, closed at once when next is the goal itself. A hint h1…
+    names one of the level's hypotheses (only those the theorem has: nhyps)."""
     _check(frm, to)
-    hints = [h for h in (hint or []) if h in RULES or h == ARITH]
-    rules = hints + [r for r in RULES if r not in hints] + ([] if ARITH in hints else [ARITH])  # arithmetic last
-    alts = " | ".join(alternatives(rules))
+    lemmas = dict(RULES)
+    for i in range(1, min(int(nhyps or 0), 9) + 1):
+        lemmas[f"h{i}"] = [f"h{i}"]
+    hints = [h for h in (hint or []) if h in lemmas or h == ARITH]
+    rules = hints + [r for r in lemmas if r not in hints] + ([] if ARITH in hints else [ARITH])  # arithmetic last
+    alts = " | ".join(alternatives(rules, lemmas))
     return f"refine Eq.trans (show {term(frm)} = {term(to)} by first | {alts}) ?_ <;> try with_reducible rfl"
 
 

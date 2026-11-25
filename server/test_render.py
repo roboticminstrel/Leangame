@@ -80,6 +80,16 @@ class Live(unittest.TestCase):
             render.step(a, v)
         self.assertNotIn("sorry", render.step(u, u, ["sorry"]))  # unknown hints are dropped
 
+    def test_hypotheses(self):
+        z = {"zero": True}
+        t = render.theorem(v, {"v": "w2"}, hyps=[[{"add": [u, v]}, z]])
+        self.assertIn("(u v w2 : V) (h1 : (u + v) = (0 : V)) :", t)
+        tac = render.step({"add": [u, v]}, z, ["h1"], nhyps=1)
+        self.assertIn("(rw [h1]; done)", tac)
+        self.assertNotIn("h1", render.step({"add": [u, v]}, z, ["h1"], nhyps=0))  # not a hypothesis of this theorem
+        with self.assertRaises(render.BadInput):
+            render.theorem(v, u, hyps=[[a, v]])
+
     def test_auto(self):
         self.assertIn("| ac_rfl", render.move({"add": [u, v]}, {"add": [v, u]}, "auto"))
 

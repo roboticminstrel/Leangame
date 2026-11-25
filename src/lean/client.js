@@ -107,7 +107,7 @@ export function createLean({ fetch = globalThis.fetch ? globalThis.fetch.bind(gl
     setLive({ state: 'starting', theorem: '', steps: [], goals: [], error: null, done: false, verified: null });
     queue = queue.then(async () => {
       lastTouch = now();
-      const r = await call('POST', '/check', { session: 'start', start: level.start, goal: level.goal });
+      const r = await call('POST', '/check', { session: 'start', start: level.start, goal: level.goal, hyps: level.hyps || [] });
       if (!r.ok || !r.sid) { setLive({ state: 'error', error: r.error || r.detail || 'Lean couldn’t start the proof' }); return; }
       sid = r.sid;
       setLive({ state: 'live', theorem: r.theorem, goals: r.goals || [] });
@@ -129,8 +129,8 @@ export function createLean({ fetch = globalThis.fetch ? globalThis.fetch.bind(gl
     }
   }
 
-  function setLevel(start, goal) {
-    level = { start, goal }; history = [];
+  function setLevel(start, goal, hyps) {
+    level = { start, goal, hyps: hyps || [] }; history = [];
     if (status.state === 'ready') beginLive();
   }
 

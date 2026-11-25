@@ -847,7 +847,8 @@ test('the TOOLS tab fills the screen with the concept graph; its current node ta
   assert.equal(v.tray.tools, true);
   assert.equal(v.tray.top, 0);
   assert.equal(Math.round(v.tray.h), Math.round(716 / (390 / 560)), 'the whole screen');
-  const done = new Set(START_DONE);
+  assert.equal(nodeState('1.27', new Set(START_DONE), '1.30'), 'next', 'fresh progress: 1.27 is a level one step away');
+  const done = new Set(START_DONE.concat(['1.27']));
   assert.equal(nodeState('1.27', done, '1.30'), 'done'); assert.equal(nodeState('1.30', done, '1.30'), 'active');
   assert.equal(nodeState('1.33', done, '1.30'), 'next', 'one step away: shown grey');
   assert.equal(nodeState('1.32', done, '1.30'), 'partial', 'needs 1.30 too: shown with a dotted line, not playable');
@@ -970,7 +971,7 @@ test('0𝑣 = 0 is not a move inside level 1.30 itself', () => {
 
 test('graph: a node with some prerequisites done shows (dotted from the missing ones); tapping it pulses what is missing', async () => {
   const { nodeState, ConceptGraph } = await import('../src/graph/ConceptGraph.js');
-  const done = new Set(levelsMod.START_DONE);
+  const done = new Set(levelsMod.START_DONE.concat(['1.27']));
   assert.equal(nodeState('1.32', done, '1.30'), 'partial', '1.27 done, 1.30 being played: shown, not playable');
   assert.equal(nodeState('1.34', done, '1.30'), 'hidden', 'its missing prerequisites are not on screen');
   const g = new ConceptGraph({ done: [...done], active: '1.30', levels: ['1.30', '1.32'] });
@@ -1032,4 +1033,54 @@ test('double-tapping a + inside a bracket aligns its terms on the first one', ()
   const ys = G2.terms.map(t => Math.round(c.P.get(t.node.id).y));
   assert.equal(new Set(ys).size, 1, 'one row');
   assert.equal(ys[0], Math.round(c.P.get(G2.terms[0].node.id).y));
+});
+
+// drag a hypothesis card from the tray, the finger ending at (tx, ty)
+function dragHyp(c, label, tx, ty) {
+  c.setState({ trayOpen: true, trayTab: 'tray' });
+  const h = c.renderVals().tray.hyps.find(x => x.text.startsWith(label + ' :'));
+  h.down(ev(0, 0)); c.hmove(ev(tx / 2, ty / 2)); c.renderVals(); c.hmove(ev(tx, ty)); c.renderVals();
+  const hover = c.state.zeroHover; c.hend(); c.renderVals(); return hover;
+}
+
+test('level 1.27: unique additive inverse, with hypotheses h and h′ as moves; Lean gets them in the theorem', () => {
+  const calls = [];
+  const lean = { setLevel: (a, g, hy) => calls.push(['level', a, g, hy]), boardChanged: (f, t, hn) => calls.push(['move', f, t, hn]), subscribe: () => () => {} };
+  const c = makeLive({ store: freshStore({ done: levelsMod.START_DONE, current: '1.27', places: {} }), lean });
+  after(c); c.initLean();
+  assert.deepEqual(readout(c), ['𝑤']);
+  const v = c.renderVals();
+  assert.equal(v.heads[1].title, 'GOAL · 1.27');
+  assert.equal(v.heads[0].rows.length, 3, 'ASSUMPTIONS: the space, the vectors, the hypotheses');
+  assert.equal(v.heads[0].rows[2].map(k => k.t).join(''), '(h : 𝑣 + 𝑤 = 0)   (h′ : 𝑣 + 𝑤′ = 0)');
+  assert.ok(c.K.ZT > 300, 'the expression sits lower to make room');
+  assert.deepEqual(calls[0][3], [[{ add: [{ v: 'v' }, { v: 'w' }] }, { zero: true }], [{ add: [{ v: 'v' }, { v: 'w2' }] }, { zero: true }]]);
+  // 𝑤 → 𝑤 + 0
+  dragPiece(c, 'PZ', ...centre(c, c.state.tops[0].node.id)); after(c);
+  assert.deepEqual(readout(c), ['𝑤 + 0']);
+  // h′ (right to left) on the 0: 𝑤 + 𝑣 + 𝑤′
+  const z = c.state.tops.find(t => t.node.key === 'zero').node;
+  const hov = dragHyp(c, 'h′', ...centre(c, z.id));
+  assert.equal(hov.id, z.id);
+  after(c);
+  assert.deepEqual(readout(c), ['𝑤 + 𝑣 + 𝑤′']);
+  assert.deepEqual(calls.slice(-2).map(x => x[3]), [['h2'], null], 'h2 makes the bracketed pair, then it opens');
+  // move 𝑤 after 𝑣: 𝑣 + 𝑤 + 𝑤′
+  const w = c.state.tops.find(t => t.node.key === 'w').node, vv = c.state.tops.find(t => t.node.key === 'v').node;
+  c.renderVals(); const pv = c.P.get(vv.id), pw = c.P.get(w.id);
+  dragTo(c, w.id, pv.x + pv.w + 26 + 70, pv.y + 44 + 140);     // out of the way first
+  c.renderVals(); const pv2 = c.P.get(vv.id), pw2 = c.P.get(c.state.tops.find(t => t.node.key === 'w2').node.id);
+  dragTo(c, w.id, (pv2.x + pv2.w + pw2.x) / 2, pv2.y + 44); after(c);
+  assert.deepEqual(readout(c), ['𝑣 + 𝑤 + 𝑤′']);
+  // h (left to right) on 𝑣: 0 + 𝑤′
+  const v2 = c.state.tops.find(t => t.node.key === 'v').node;
+  dragHyp(c, 'h', ...centre(c, v2.id)); after(c);
+  assert.deepEqual(readout(c), ['0 + 𝑤′']);
+  assert.deepEqual(calls[calls.length - 1][3], ['h1']);
+  // absorb the 0: 𝑤′
+  const z2 = c.state.tops.find(t => t.node.key === 'zero').node, w2 = c.state.tops.find(t => t.node.key === 'w2').node;
+  dragTo(c, z2.id, ...centre(c, w2.id)); after(c);
+  assert.deepEqual(readout(c), ['𝑤′']);
+  assert.equal(c.renderVals().won, true);
+  assert.ok(c.prog.done.includes('1.27'));
 });

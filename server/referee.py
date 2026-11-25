@@ -190,7 +190,8 @@ class Sessions:
         return errs
 
     def start(self, body):
-        head = render.theorem(body.get("start"), body.get("goal"))
+        hyps = body.get("hyps") or []
+        head = render.theorem(body.get("start"), body.get("goal"), hyps=hyps)
         r = self.repl.raw({"cmd": head + "\n  sorry"})
         errs = self.errors_of(r)
         sorries = r.get("sorries", [])
@@ -201,14 +202,14 @@ class Sessions:
             sid = f"s{self.n}"
             if len(self.live) > 50:
                 self.live.pop(next(iter(self.live)))
-            self.live[sid] = {"ps": sorries[0]["proofState"], "head": head, "tactics": [], "restarts": self.repl.restarts}
+            self.live[sid] = {"ps": sorries[0]["proofState"], "head": head, "tactics": [], "restarts": self.repl.restarts, "nhyps": len(hyps)}
         return 200, {"ok": True, "sid": sid, "theorem": head, "goals": self.goals_of(r)}
 
     def step(self, body):
         s = self.live.get(body.get("sid"))
         if not s or s["restarts"] != self.repl.restarts:
             return 409, {"ok": False, "error": "session ended: start again"}
-        tac = render.step(body.get("from"), body.get("to"), body.get("hint"))
+        tac = render.step(body.get("from"), body.get("to"), body.get("hint"), s.get("nhyps", 0))
         r = self.repl.raw({"tactic": tac, "proofState": s["ps"]})
         errs = self.errors_of(r)
         if errs or "proofState" not in r:
@@ -394,6 +395,22 @@ def selftest():
     checks.append(("live: level 1.32 ((−1)v = −v) played through, whole proof compiles", rm.get("ok") and rm.get("done") and rm.get("verified")))
     if not rm.get("done"):
         print("     level 1.32 stopped at", json.dumps(cur), "->", json.dumps(rm)[:600], flush=True)
+    # level 1.27: (h1 : v + w = 0) (h2 : v + w2 = 0) : w = w2, the way the board plays it:
+    # w → w + 0 → w + (v + w2) → w + v + w2 → v + w + w2 → 0 + w2 → w2
+    W, W2, Z = {"v": "w"}, {"v": "w2"}, {"zero": True}
+    hy = [[{"add": [w, W]}, Z], [{"add": [w, W2]}, Z]]
+    seq3 = [({"add": [W, Z]}, ["add_zero"]), ({"add": [W, {"add": [w, W2]}]}, ["h2"]), ({"add": [W, w, W2]}, None),
+            ({"add": [w, W, W2]}, None), ({"add": [Z, W2]}, ["h1"]), (W2, ["add_zero"])]
+    code, stu = ss.start({"start": W, "goal": W2, "hyps": hy})
+    cur, ru = W, {}
+    for nxt, hint in seq3:
+        ru = ss.step({"sid": stu.get("sid"), "from": cur, "to": nxt, "hint": hint})[1]
+        if not ru.get("ok"):
+            break
+        cur = nxt
+    checks.append(("live: level 1.27 (unique inverse, with hypotheses h1 h2) played through, whole proof compiles", ru.get("ok") and ru.get("done") and ru.get("verified")))
+    if not ru.get("done"):
+        print("     level 1.27 stopped at", json.dumps(cur), "->", json.dumps(ru)[:600], json.dumps(stu)[:300], flush=True)
     code, st2 = ss.start({"start": {"add": [u, w]}, "goal": {"add": [w, u]}})
     r3 = ss.step({"sid": st2.get("sid"), "from": {"add": [u, w]}, "to": {"add": [w, u]}})[1]
     checks.append(("live: rearranging a sum is a step (ac_rfl)", r3.get("ok") and r3.get("done") and r3.get("verified")))
