@@ -360,3 +360,20 @@ test('live board: the readout follows the tree as moves change it', () => {
   // the gold zero is in ℝ: it isn't offered to vectors
   assert.equal(dragPiece(c, 'PZS', ...centre(c, v.id)), null);
 });
+
+test('negative tiles are night tiles: −1 has a dark face and keeps its minus; −𝑣 has a dark body, a day edge, and −𝑣 written', () => {
+  const c = makeLive();
+  const v = c.renderVals();
+  const neg1 = v.hexes.find(h => h.el === '−1'), two = v.hexes.find(h => h.el === '2');
+  assert.equal(neg1.face, '#3B2C12'); assert.equal(two.face, '#FFF8E6');
+  // a −𝑣 (no move makes one yet: set it up by hand)
+  const T = c.state.tops[1].node; c.state.tops[1].node = Object.assign(c.mkV('𝑉', '𝑣', 'v', 'R', 140), { neg: true });
+  const v2 = c.renderVals();
+  const nv = v2.vecs.find(t => t.el === '−𝑣');
+  assert.ok(nv, '−𝑣 is written on the tile');
+  assert.equal(nv.face, '#182654');
+  assert.ok(v2.vecs.find(t => t.el === '𝑣').face === '#F5F8FF', 'positive vectors stay day');
+  assert.deepEqual(readout(c), ['(2 + 3)𝑣 + −𝑣']);
+  assert.equal(c.zoneValue, '= 4𝑣', 'and it evaluates as −𝑣');
+  assert.notEqual(c.sig(c.state.tops[1].node), c.sig(T.vec), '−𝑣 and 𝑣 are different tiles');
+});

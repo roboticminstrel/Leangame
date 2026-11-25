@@ -14,6 +14,16 @@ export class Range extends Component {
     this.setBoard = el => { this.board = el; };
   }
   nid(p) { return p + (this.uid++); }
+  // Negative tiles are "night" tiles: the top band stays, the face goes dark in its own type's tint. A scalar is
+  // negative when its value is (−1, −½, −𝑖); a vector when it's an additive inverse −𝑣 (neg: true). The minus
+  // is always written on the tile too.
+  isNeg(n) { return n.t === 's' ? String(n.val).charAt(0) === '-' : n.t === 'v' ? !!n.neg : false; }
+  look(n) {
+    const night = this.isNeg(n);
+    if (n.t === 's') return night ? { face: '#3B2C12', fg: '#FFE9B8', lip: '#7A5214' } : { face: '#FFF8E6', fg: '#16130C', lip: '#B7791F' };
+    return night ? { face: '#182654', fg: '#DCE6FF', lip: '#0A1233' } : { face: '#F5F8FF', fg: '#16130C', lip: '#1E3A8A' };
+  }
+  elText(n) { return n.t === 'v' && n.neg ? '−' + n.el : n.el; }
   mkS(field, el, val) { return { id: this.nid('s'), t: 's', field: field, el: el, val: val }; }
   mkV(type, el, key, field, w) { return { id: this.nid('v'), t: 'v', type: type, el: el, key: key, field: field, w: w }; }
   mkProd(f, v) { return { id: this.nid('p'), t: 'prod', factors: f, vec: v }; }
@@ -208,6 +218,7 @@ export class Range extends Component {
   evalN(n) {
     if (n.t === 's') return { k: 's', c: this.cval(n.val) };
     if (n.t === 'v' && n.key === 'zero') return { k: 'v', coords: null, coef: {}, zero: true };
+    if (n.t === 'v' && n.neg) return this.scaleV(this.evalN(Object.assign({}, n, { neg: false })), [-1, 0]);
     if (n.t === 'v') return n.key === 'u' ? { k: 'v', coords: [[1, 0], [2, 0], [3, 0]], coef: {} } : { k: 'v', coords: null, coef: { [n.el]: [1, 0] } };
     if (n.t === 'prod') {
       let c = [1, 0];
@@ -360,7 +371,8 @@ export class Range extends Component {
     this.P.set(n.id, { x: x, y: y, w: m.w, h: m.h, depth: depth });
     if (n.t === 's') {
       const sl = this.state.slide && this.state.slide.id === n.id ? this.state.slide : null;
-      R.hexes.push({ x: x, y: y, dx: sl ? sl.x - x : 0, dy: sl ? sl.y - y : 0, el: n.el, type: this.fieldSym(n.field), elSize: n.el.length > 3 ? 20 : 28,
+      const lk = this.look(n);
+      R.hexes.push({ x: x, y: y, dx: sl ? sl.x - x : 0, dy: sl ? sl.y - y : 0, face: lk.face, fg: lk.fg, lip: lk.lip, el: n.el, type: this.fieldSym(n.field), elSize: n.el.length > 3 ? 20 : 28,
         band: ctx.abstract ? 'repeating-linear-gradient(135deg, #F2B33D 0 6px, #DFA02A 6px 12px)' : '#F2B33D', sink: ctx.abstract ? 3 : 0,
         z: z, scale: dragging ? 1.04 : 1, shadow: dragging ? 14 : 7, anim: sl ? 'zeroIn 0.4s ease-out' : this._glow && this._glow.has(n.id) ? 'rgPulse 1.4s ease-in-out infinite' : 'none', down: this.onDown(n.id, 'self'), aria: 'Scalar ' + n.el + ' in ' + this.fieldSym(n.field) });
       return;
@@ -368,11 +380,12 @@ export class Range extends Component {
     if (n.t === 'v') {
       const holding = this.state.holding === n.id;
       const sl = this.state.slide && this.state.slide.id === n.id ? this.state.slide : null;
-      R.vecs.push({ x: x, y: y, w: n.w, type: n.type, el: n.el, elSize: n.el.length > 4 ? 21 : 27,
+      const lk = this.look(n); const et = this.elText(n);
+      R.vecs.push({ x: x, y: y, w: n.w, type: n.type, el: et, elSize: et.length > 4 ? 21 : 27, face: lk.face, fg: lk.fg, lip: lk.lip,
         hasField: !!n.field, fLabel: this.fieldSym(n.field), pieceScale: holding ? 0.9 : 1, pieceBg: holding ? '#F7CD6E' : '#F2B33D',
         z: z, scale: dragging ? 1.04 : 1, shadow: dragging ? 14 : 7, down: this.onDown(n.id, 'self'), pieceDown: this.onDown(n.id, 'strip'),
         anim: sl ? 'zeroIn 0.4s ease-out' : this._glow && this._glow.has(n.id) ? 'rgPulse 1.4s ease-in-out infinite' : 'none', dx: sl ? sl.x - x : 0, dy: sl ? sl.y - y : 0,
-        aria: 'Vector ' + n.el + ' in ' + n.type + (n.field ? ' over ' + this.fieldSym(n.field) : ', field not fixed') });
+        aria: 'Vector ' + et + ' in ' + n.type + (n.field ? ' over ' + this.fieldSym(n.field) : ', field not fixed') });
       return;
     }
     if (n.t === 'prod') {
@@ -560,7 +573,7 @@ export class Range extends Component {
   }
   sig(n) {
     if (n.t === 's') return 's:' + n.field + ':' + n.val;
-    if (n.t === 'v') return 'v:' + n.type + ':' + n.el + ':' + n.field;
+    if (n.t === 'v') return 'v:' + n.type + ':' + (n.neg ? '-' : '') + n.el + ':' + n.field;
     if (n.t === 'prod') return 'p(' + n.factors.map(f => this.sig(f)).join('*') + '|' + (n.vec ? this.sig(n.vec) : '') + ')';
     return 'g(' + n.terms.map(t => this.sig(t.node)).sort().join('+') + ')';
   }
@@ -893,7 +906,7 @@ export class Range extends Component {
     const pos = n => this.P.get(n.id) || { x: 0, y: 0 };
     const order = ns => ns.slice().sort((a, b) => Math.abs(pos(a).y - pos(b).y) > 60 ? pos(a).y - pos(b).y : pos(a).x - pos(b).x);
     const one = n => {
-      if (n.t === 's' || n.t === 'v') return n.el;
+      if (n.t === 's' || n.t === 'v') return this.elText(n);
       if (n.t === 'sum') return '(' + order(n.terms.map(t => t.node)).map(one).join(' + ') + ')';
       const fs = n.factors.map(one).join('·');
       return n.vec ? fs + one(n.vec) : fs;
@@ -903,7 +916,7 @@ export class Range extends Component {
   }
   // a short text form of a term, for messages: −1·𝑣, (2 + 3)·𝑣
   label(n) {
-    if (n.t === 's' || n.t === 'v') return n.el;
+    if (n.t === 's' || n.t === 'v') return this.elText(n);
     if (n.t === 'prod') return n.factors.map(f => this.label(f)).concat(n.vec ? [this.label(n.vec)] : []).join('·');
     return '(' + n.terms.map(t => this.label(t.node)).join(' + ') + ')';
   }
@@ -1060,8 +1073,8 @@ export class Range extends Component {
       const v = o && o.node.vec; const G = o && o.node.factors[o.node.factors.length - 1];
       if (v && G) G.terms.forEach(t => {
         const tp = this.P.get(t.node.id); if (!tp) return;
-        ghosts.push({ x: tp.x + tp.w - 22, y: tp.y + tp.h / 2 - 44, type: v.type.split(' ')[0], el: v.el, elSize: v.el.length > 4 ? 20 : 27,
-          clip: 'polygon(0 0, calc(100% - 22px) 0, 100% 50%, calc(100% - 22px) 100%, 0 100%, 22px 50%)', face: '#F5F8FF', band: '#2F5BD3', bandFg: '#FFFFFF' });
+        ghosts.push({ x: tp.x + tp.w - 22, y: tp.y + tp.h / 2 - 44, type: v.type.split(' ')[0], el: this.elText(v), elSize: v.el.length > 4 ? 20 : 27,
+          clip: 'polygon(0 0, calc(100% - 22px) 0, 100% 50%, calc(100% - 22px) 100%, 0 100%, 22px 50%)', face: this.look(v).face, fg: this.look(v).fg, band: '#2F5BD3', bandFg: '#FFFFFF' });
       });
     }
     if (St.preview && St.preview.type === 'expand' && this.drag) {
@@ -1071,7 +1084,7 @@ export class Range extends Component {
         const lft = gi >= 0 ? P.factors[gi - 1] : P.factors[P.factors.length - 1];
         const rgt = gi >= 0 ? P.factors[gi + 1] : null;
         const G = gi >= 0 ? P.factors[gi] : P.vec;
-        const gh = n => ({ type: n.t === 's' ? this.fieldSym(n.field) : '( )', el: n.t === 's' ? n.el : '…', elSize: n.t === 's' && n.el.length > 3 ? 20 : 28, clip: HEXC, face: '#FFF8E6', band: '#F2B33D', bandFg: '#2A1D04' });
+        const gh = n => ({ type: n.t === 's' ? this.fieldSym(n.field) : '( )', el: n.t === 's' ? n.el : '…', elSize: n.t === 's' && n.el.length > 3 ? 20 : 28, clip: HEXC, face: n.t === 's' ? this.look(n).face : '#FFF8E6', fg: n.t === 's' ? this.look(n).fg : '#16130C', band: '#F2B33D', bandFg: '#2A1D04' });
         G.terms.forEach(t => {
           const tp = this.P.get(t.node.id); if (!tp) return;
           const cy = tp.y + tp.h / 2 - 44;
@@ -1088,12 +1101,12 @@ export class Range extends Component {
       op: rules ? 0.3 : 1, pe: rules ? 'none' : 'auto', down: this.pieceDown(p), aria: 'Field ' + this.fieldSym(p.field) + ': slot onto a vector’s 𝐅, or tap for a scalar' }));
     const ps = St.pieces.find(p => p.kind === 'paren');
     const zp = St.pieces.find(p => p.kind === 'zero'); const zDrag = !!(this.pdrag && this.pdrag.id === zp.id);
-    const zeroTile = { x: zp.x, y: zp.y, w: this.K.ZW, type: zDrag && St.zeroHover ? (St.zeroHover.sp || '𝑉').split(' ')[0] : '𝑉', el: '0', elSize: 27,
+    const zeroTile = { x: zp.x, y: zp.y, w: this.K.ZW, type: zDrag && St.zeroHover ? (St.zeroHover.sp || '𝑉').split(' ')[0] : '𝑉', el: '0', elSize: 27, face: '#F5F8FF', fg: '#16130C', lip: '#1E3A8A',
       hasField: false, z: zDrag ? 990 : 6, scale: zDrag ? 1.04 : 1, shadow: zDrag ? 14 : 7, anim: 'none', dx: 0, dy: 0, down: this.pieceDown(zp),
       aria: 'The zero vector: drag it onto a vector, or onto a vector sum’s right bracket, to add + 0' };
     const zs = St.pieces.find(p => p.kind === 'zeroS'); const zsDrag = !!(this.pdrag && this.pdrag.id === zs.id);
     const zsHover = zsDrag && St.zeroHover;
-    const zeroHex = { x: zs.x, y: zs.y, dx: 0, dy: 0, el: '0', elSize: 28, type: zs.field ? this.fieldSym(zs.field) : zsHover && zsHover.f ? this.fieldSym(zsHover.f) : '𝐅', band: '#F2B33D', sink: 0,
+    const zeroHex = { x: zs.x, y: zs.y, dx: 0, dy: 0, el: '0', elSize: 28, face: '#FFF8E6', fg: '#16130C', lip: '#B7791F', type: zs.field ? this.fieldSym(zs.field) : zsHover && zsHover.f ? this.fieldSym(zsHover.f) : '𝐅', band: '#F2B33D', sink: 0,
       z: zsDrag ? 990 : 6, scale: zsDrag ? 1.04 : 1, shadow: zsDrag ? 14 : 7, anim: 'none', down: this.pieceDown(zs),
       aria: 'The scalar zero: drag it onto a scalar, or onto a scalar sum’s right bracket, to add + 0' };
     return {
@@ -1160,10 +1173,10 @@ export class Range extends Component {
           <span style="position: absolute; left: 0; top: 0; width: 52px; height: 30px; display: block; background: #C38F2A; box-shadow: inset 0 3px 6px rgba(60,38,0,0.60)"></span>
           <span style="position: absolute; left: 8px; top: 0; width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; color: #5A420E; font-size: 17px; font-weight: 700">𝐅</span>
         </span>
-        <span style="position: absolute; left: 0; top: 5px; width: 100%; height: 83px; display: block; clip-path: polygon(33px 0, calc(100% - 22px) 0, 100% 50%, calc(100% - 22px) 100%, 33px 100%, 55px 50%); background: #1E3A8A"></span>
-        <span style="position: absolute; left: 0; top: 0; width: 100%; height: 83px; display: block; clip-path: polygon(33px 0, calc(100% - 22px) 0, 100% 50%, calc(100% - 22px) 100%, 33px 100%, 55px 50%); background: #F5F8FF">
+        <span style="position: absolute; left: 0; top: 5px; width: 100%; height: 83px; display: block; clip-path: polygon(33px 0, calc(100% - 22px) 0, 100% 50%, calc(100% - 22px) 100%, 33px 100%, 55px 50%); background: ${t.lip}"></span>
+        <span style=${`position: absolute; left: 0; top: 0; width: 100%; height: 83px; display: block; clip-path: polygon(33px 0, calc(100% - 22px) 0, 100% 50%, calc(100% - 22px) 100%, 33px 100%, 55px 50%); background: ${t.face}`}>
           <span style="position: absolute; left: 0; top: 0; right: 0; height: 30px; box-sizing: border-box; padding: 0 26px 0 60px; display: flex; align-items: center; justify-content: center; background: #2F5BD3; color: #FFFFFF; font-size: 15px; font-weight: 700; white-space: nowrap">${t.type}</span>
-          <span style=${`position: absolute; left: 0; top: 30px; right: 0; bottom: 0; box-sizing: border-box; padding: 0 26px 0 60px; display: flex; align-items: center; justify-content: center; font-size: ${t.elSize}px; color: #16130C; white-space: nowrap`}>${t.el}</span>
+          <span style=${`position: absolute; left: 0; top: 30px; right: 0; bottom: 0; box-sizing: border-box; padding: 0 26px 0 60px; display: flex; align-items: center; justify-content: center; font-size: ${t.elSize}px; color: ${t.fg}; white-space: nowrap`}>${t.el}</span>
         </span>
         ${t.hasField ? html`
           <span onPointerDown=${t.pieceDown} style=${`position: absolute; left: 0; top: 0; width: 46px; height: 34px; display: block; transform: scale(${t.pieceScale})`}>
@@ -1176,10 +1189,10 @@ export class Range extends Component {
 
     ${v.hexes.map((t) => html`
       <button onPointerDown=${t.down} aria-label=${t.aria} style=${`position: absolute; left: ${t.x}px; top: ${t.y}px; width: 96px; height: 88px; padding: 0; border: none; background: transparent; touch-action: none; cursor: grab; z-index: ${t.z}; transform: translateY(${t.sink}px) scale(${t.scale}); filter: drop-shadow(0 ${t.shadow}px 12px rgba(0,0,0,0.40)); animation: ${t.anim}; --dx: ${t.dx}px; --dy: ${t.dy}px; font-family: inherit`}>
-        <span style="position: absolute; left: 0; top: 5px; width: 100%; height: 83px; display: block; clip-path: polygon(22px 0, calc(100% - 22px) 0, 100% 50%, calc(100% - 22px) 100%, 22px 100%, 0 50%); background: #B7791F"></span>
-        <span style="position: absolute; left: 0; top: 0; width: 100%; height: 83px; display: flex; flex-direction: column; clip-path: polygon(22px 0, calc(100% - 22px) 0, 100% 50%, calc(100% - 22px) 100%, 22px 100%, 0 50%); background: #FFF8E6">
+        <span style="position: absolute; left: 0; top: 5px; width: 100%; height: 83px; display: block; clip-path: polygon(22px 0, calc(100% - 22px) 0, 100% 50%, calc(100% - 22px) 100%, 22px 100%, 0 50%); background: ${t.lip}"></span>
+        <span style=${`position: absolute; left: 0; top: 0; width: 100%; height: 83px; display: flex; flex-direction: column; clip-path: polygon(22px 0, calc(100% - 22px) 0, 100% 50%, calc(100% - 22px) 100%, 22px 100%, 0 50%); background: ${t.face}`}>
           <span style=${`height: 30px; display: flex; align-items: center; justify-content: center; background: ${t.band}; color: #2A1D04; font-size: 17px; font-weight: 700`}>${t.type}</span>
-          <span style=${`flex: 1 1 auto; display: flex; align-items: center; justify-content: center; font-size: ${t.elSize}px; color: #16130C; white-space: nowrap`}>${t.el}</span>
+          <span style=${`flex: 1 1 auto; display: flex; align-items: center; justify-content: center; font-size: ${t.elSize}px; color: ${t.fg}; white-space: nowrap`}>${t.el}</span>
         </span>
       </button>
     `)}
@@ -1188,7 +1201,7 @@ export class Range extends Component {
       <div aria-hidden="true" style=${`position: absolute; left: ${t.x}px; top: ${t.y}px; width: 96px; height: 88px; z-index: 880; opacity: 0.5; pointer-events: none`}>
         <div style=${`position: absolute; left: 0; top: 0; width: 96px; height: 83px; display: flex; flex-direction: column; clip-path: ${t.clip}; background: ${t.face}`}>
           <div style=${`height: 30px; display: flex; align-items: center; justify-content: center; background: ${t.band}; color: ${t.bandFg}; font-size: 17px; font-weight: 700`}>${t.type}</div>
-          <div style=${`flex: 1 1 auto; display: flex; align-items: center; justify-content: center; font-size: ${t.elSize}px; color: #16130C; white-space: nowrap`}>${t.el}</div>
+          <div style=${`flex: 1 1 auto; display: flex; align-items: center; justify-content: center; font-size: ${t.elSize}px; color: ${t.fg}; white-space: nowrap`}>${t.el}</div>
         </div>
       </div>
     `)}

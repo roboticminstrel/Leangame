@@ -63,8 +63,7 @@
   .vec.night .blip { background: var(--v-night-lip); }
   .vec.night .body { background: var(--v-night); }
   .vec.night .vel { color: var(--v-night-fg); }
-  .vec.night .edge { background: var(--e-night); }      /* the field edge's body goes dark too */
-  .vec.night.dayedge .edge { background: var(--e-day); } /* variant: it stays light */
+  /* the field edge keeps its day colours: only the part holding the variable goes night */
 
   .swatches { display: grid; grid-template-columns: auto 1fr 1fr; gap: 6px 10px; font-size: 13px; align-items: center; }
   .sw { display: inline-block; width: 18px; height: 18px; border-radius: 5px; vertical-align: middle; margin-right: 6px; border: 1px solid rgba(255,255,255,0.25); }
@@ -75,28 +74,24 @@
 <body>
 <main>
   <h1>NEGATIVE TILES · MOCKUP</h1>
-  <p>The top band stays as it is. The bottom goes dark ("night"), keeping each type's own tint: warm brown for scalars, deep navy for vectors. That way a negative scalar and a negative vector never look alike.</p>
+  <p>The top band stays as it is. The bottom goes dark ("night"), keeping each type's own tint: warm brown for scalars, deep navy for vectors. That way a negative scalar and a negative vector never look alike. The minus is always written; a vector's 𝐅 edge keeps its day colours. (Chosen 2026-11-25; the Range uses these now.)</p>
 
   <h2>Scalars (field tiles)</h2>
   <div class="row">
     <div class="cell"><div class="hex"><span class="lip"></span><span class="face"><span class="band">ℝ</span><span class="el">1</span></span></div><div class="cap">day: 1</div></div>
-    <div class="cell"><div class="hex night"><span class="lip"></span><span class="face"><span class="band">ℝ</span><span class="el">−1</span></span></div><div class="cap">night, minus shown: −1</div></div>
-    <div class="cell"><div class="hex night"><span class="lip"></span><span class="face"><span class="band">ℝ</span><span class="el">1</span></span></div><div class="cap">night, colour only: −1</div></div>
+    <div class="cell"><div class="hex night"><span class="lip"></span><span class="face"><span class="band">ℝ</span><span class="el">−1</span></span></div><div class="cap">night: −1</div></div>
   </div>
   <div class="row" style="margin-top: 14px">
     <div class="cell"><div class="hex"><span class="lip"></span><span class="face"><span class="band">ℂ</span><span class="el math"><i>i</i></span></span></div><div class="cap">day: 𝑖</div></div>
     <div class="cell"><div class="hex night"><span class="lip"></span><span class="face"><span class="band">ℂ</span><span class="el math">−<i>i</i></span></span></div><div class="cap">night: −𝑖</div></div>
-    <div class="cell"><div class="hex night"><span class="lip"></span><span class="face"><span class="band">ℝ</span><span class="el">½</span></span></div><div class="cap">night, colour only: −½</div></div>
   </div>
 
   <h2>Vectors</h2>
   <div class="row">
     <div class="cell"><div class="vec" style="width:140px"><span class="elip"></span><span class="edge"><i></i><b>𝐅</b></span><span class="blip"></span><span class="body"><span class="vband">𝑉</span><span class="vel"><i>v</i></span></span></div><div class="cap">day: 𝑣</div></div>
-    <div class="cell"><div class="vec night" style="width:140px"><span class="elip"></span><span class="edge"><i></i><b>𝐅</b></span><span class="blip"></span><span class="body"><span class="vband">𝑉</span><span class="vel">−<i>v</i></span></span></div><div class="cap">night, minus shown: −𝑣</div></div>
-    <div class="cell"><div class="vec night" style="width:140px"><span class="elip"></span><span class="edge"><i></i><b>𝐅</b></span><span class="blip"></span><span class="body"><span class="vband">𝑉</span><span class="vel"><i>v</i></span></span></div><div class="cap">night, colour only: −𝑣</div></div>
+    <div class="cell"><div class="vec night" style="width:140px"><span class="elip"></span><span class="edge"><i></i><b>𝐅</b></span><span class="blip"></span><span class="body"><span class="vband">𝑉</span><span class="vel">−<i>v</i></span></span></div><div class="cap">night: −𝑣</div></div>
   </div>
   <div class="row" style="margin-top: 14px">
-    <div class="cell"><div class="vec night dayedge" style="width:140px"><span class="elip"></span><span class="edge"><i></i><b>𝐅</b></span><span class="blip"></span><span class="body"><span class="vband">𝑉</span><span class="vel">−<i>v</i></span></span></div><div class="cap">variant: the field edge stays light</div></div>
     <div class="cell"><div class="vec night" style="width:110px"><span class="elip"></span><span class="edge"><i></i><b>𝐅</b></span><span class="blip"></span><span class="body"><span class="vband">𝑉</span><span class="vel">0</span></span></div><div class="cap">night 0 (−0 = 0), for comparison</div></div>
   </div>
 
@@ -120,7 +115,7 @@
     <span>vector body</span><span><span class="sw" style="background:#F5F8FF"></span>#F5F8FF</span><span><span class="sw" style="background:#182654"></span>#182654</span>
     <span>vector text</span><span><span class="sw" style="background:#16130C"></span>#16130C</span><span><span class="sw" style="background:#DCE6FF"></span>#DCE6FF</span>
     <span>vector lip</span><span><span class="sw" style="background:#1E3A8A"></span>#1E3A8A</span><span><span class="sw" style="background:#0A1233"></span>#0A1233</span>
-    <span>field edge</span><span><span class="sw" style="background:#F1E7CD"></span>#F1E7CD</span><span><span class="sw" style="background:#4A3816"></span>#4A3816</span>
+    <span>field edge</span><span><span class="sw" style="background:#F1E7CD"></span>#F1E7CD</span><span>(stays day)</span>
   </div>
 </main>
 </body>
