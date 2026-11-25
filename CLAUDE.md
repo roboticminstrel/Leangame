@@ -114,7 +114,8 @@ Leangame is hosted the same way as James's other project, Interlinea (`roboticmi
   unpack it, so they should be quick (not measured).
 - The boot script clones Leangame `main` (public), runs `setup.sh`, then starts the referee with `systemd-run`.
   Phases go to `status/<instance>.json`, which the gate shows while booting. On failure, it shuts down in 3 minutes.
-  Hard limit: 3 h, because `scripts/aws-audit.py` flags machines past 3.5 h; the lean role is on its worker list.
+  Idle shutdown uses `/usr/sbin/shutdown` by full path (the boot script's PATH has no /usr/sbin, so before this fix the
+  machine never idled out) and retries each minute. Hard limit: 3 h, because `scripts/aws-audit.py` flags machines past 3.5 h; the lean role is on its worker list.
 - The Lambda reaches the machine at its public IP over plain HTTP (no VPC permissions in the boundary). Port 8787 is
   open, with the token required. Token: SSM SecureString `/interlinea/lean/server-token`.
 
