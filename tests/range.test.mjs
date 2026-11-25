@@ -1010,3 +1010,26 @@ test('dragging a group from the tree: the finger decides the target, whatever pa
   assert.equal(hover && hover.id, z.id);
   assert.deepEqual(readout(c), ['0𝑣 − (0𝑣) + 0𝑣']);
 });
+
+test('double-tapping a + in the expression lines the terms up in a row that stays below the readout', () => {
+  const c = makeLive();            // demo board: (2 + 3)𝑣 above, −1𝑣 lower and to the right
+  c.renderVals();
+  c.arrange('zone'); c.renderVals();
+  const boxes = c.state.tops.filter(t => c.zoneIds.includes(t.node.id)).map(t => c.P.get(t.node.id));
+  const cys = boxes.map(p => Math.round(p.y + p.h / 2));
+  assert.equal(new Set(cys).size, 1, 'one row');
+  assert.ok(boxes.every(p => p.y >= c.K.ZT + 104), 'nothing rises into the heading and readout');
+  assert.deepEqual(readout(c), ['(2 + 3)𝑣 + −1𝑣']);
+});
+
+test('double-tapping a + inside a bracket aligns its terms on the first one', () => {
+  const c = makeLive();
+  const G = c.state.tops[0].node.factors[0];
+  G.terms[1].y = 60;               // knock the 3 out of line
+  c.renderVals(); const y0 = c.P.get(G.terms[0].node.id).y;
+  c.arrange(G.id); c.renderVals();
+  const G2 = c.state.tops[0].node.factors[0];
+  const ys = G2.terms.map(t => Math.round(c.P.get(t.node.id).y));
+  assert.equal(new Set(ys).size, 1, 'one row');
+  assert.equal(ys[0], Math.round(c.P.get(G2.terms[0].node.id).y));
+});

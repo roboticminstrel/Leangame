@@ -1624,22 +1624,34 @@ export class Range extends Component {
       else this._lastTap = { g: gid, t: now };
     };
   }
+  // Double-tapping a + lines its terms up in one row, in the order the plus signs join them, starting from the
+  // leftmost end. The row keeps the first tile's height and left edge (so it stays where it was), and in the
+  // expression never rises into the heading and readout above it. The tiles glide into place.
   arrange(gid) {
     const tops = this.clone(this.state.tops);
+    const lineUp = (slots, boxes, order, minCy) => {
+      if (order.length && boxes[order[0]].x > boxes[order[order.length - 1]].x) order = order.slice().reverse();
+      const first = boxes[order[0]];
+      const hMax = Math.max(...order.map(i => boxes[i].h));
+      const cy = Math.max(first.y + first.h / 2, minCy + hMax / 2);
+      let cur = slots[order[0]].x;
+      order.forEach(i => { slots[i].x = cur; slots[i].y = cy - boxes[i].h / 2; cur += boxes[i].w + this.K.GAP; });
+    };
     if (gid === 'zone') {
       const items = this.zoneIds.map(id => tops.find(t => t.node.id === id)).filter(Boolean);
-      const order = this.zonePath.map(i => items[i]);
-      let cur = 30; const cy = 326;
-      order.forEach(t => { const p = this.P.get(t.node.id); t.x = cur; t.y = cy - p.h / 2; cur += p.w + 52; });
+      const boxes = items.map(t => this.P.get(t.node.id));
+      // slots and boxes in the same (world) units; the row's top stays below the readout
+      lineUp(items, items.map((t, i) => ({ x: t.x, y: t.y, w: boxes[i].w, h: boxes[i].h })), this.zonePath.slice(), this.K.ZT + 104);
     } else {
       const loc = this.locate(tops, gid); if (!loc) return;
       const S = loc.node;
       const bx = S.terms.map(t => this.P.get(t.node.id));
       const path = this.bestPath(bx.map(p => ({ x: p.x + p.w / 2, y: p.y + p.h / 2 })), bx);
-      let cur = 0;
-      path.forEach(i => { const t = S.terms[i]; const p = this.P.get(t.node.id); t.x = cur; t.y = -p.h / 2; cur += p.w + 52; });
+      // inside a bracket the terms' own coordinates are relative to it
+      lineUp(S.terms, S.terms.map((t, i) => ({ x: t.x, y: t.y, w: bx[i].w, h: bx[i].h })), path, -1e9);
     }
-    this.setState({ tops: tops });
+    this.setState({ tops: tops, histAnim: true });
+    clearTimeout(this._ha); this._ha = setTimeout(() => this.setState({ histAnim: false }), 450);
   }
   flash(at, text, kind) {
     const f = { x: Math.max(12, Math.min((at && at.x || 40) - 40, 200)), y: Math.max(120, (at && at.y || 200) - 50), text: text, kind: kind };
