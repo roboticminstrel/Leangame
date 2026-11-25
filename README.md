@@ -16,3 +16,26 @@ Each move maps to a Lean/Mathlib rewrite (`add_smul`, `smul_add`, `mul_comm`, `o
 ## Status
 
 Front-end prototype stage.
+
+## Running it
+
+No build step: Preact and htm are vendored in `vendor/` as ES modules.
+
+```sh
+npm run serve      # python3 -m http.server 8000, then open http://localhost:8000
+npm test           # node --test: gesture and evaluation tests for the Range
+```
+
+## Layout
+
+- `index.html`, `styles.css`: the page shell
+- `src/range/Range.js`: the Range board (tiles, brackets, docking, Rules mode, pan and pinch zoom)
+- `src/main.js`, `src/html.js`: mounting and the `html` template tag
+- `vendor/`: Preact 10 and htm 3 (MIT, licenses alongside)
+- `tests/`: `node:test` suites that drive the component directly
+
+## Deploying
+
+`main` deploys to **https://lean.interlinea.io** through `.github/workflows/deploy.yml` (S3 + CloudFront, signed in to AWS with GitHub OIDC; no stored keys). The infrastructure is in `roboticminstrel/Interlinea-proto` (`infra/terraform/lean.tf`). Once that's applied, merging to `main` deploys; no repository variables are needed (the deploy role is fixed and the distribution id comes from SSM).
+
+`scripts/deploy.sh` also works by hand with an AWS login: `BUCKET=lean-interlinea-io-site scripts/deploy.sh`.

@@ -1,0 +1,38 @@
+# Deploy the site to lean.interlinea.io (PROTOTYPE, written by Claude).
+# Infrastructure: roboticminstrel/Interlinea-proto, infra/terraform/lean.tf. The role below exists once that's applied;
+# the CloudFront distribution id is read from SSM, so this repo needs no Actions variables (vars.* can still override).
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    paths: ["index.html", "styles.css", "src/**", "vendor/**", ".github/workflows/deploy.yml"]
+  workflow_dispatch:
+
+permissions:
+  id-token: write   # OIDC sign-in to AWS
+  contents: read
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      BUCKET: ${{ vars.LEAN_BUCKET || 'lean-interlinea-io-site' }}
+      DISTRIBUTION_ID: ${{ vars.LEAN_DISTRIBUTION_ID }}   # empty: read from SSM
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Tests must pass before anything ships
+        run: npm test
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN || 'arn:aws:iam::589305835200:role/interlinea-lean-deploy' }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-2' }}
+      - name: Upload the site and refresh the cache
+        run: scripts/deploy.sh
