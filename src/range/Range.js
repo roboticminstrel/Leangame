@@ -143,10 +143,20 @@ export class Range extends Component {
   // ---------- levels: a level's place is its move history (each entry the board after a move, with the Lean steps
   // that move sent) and where in it the player is ----------
   // the header's height depends on the level: a line for its vectors and one for its hypotheses, when it has them
-  layoutFor(id) {
+  // hyps: the hypotheses now in play (the level's own, plus a line per witness); by default the saved place's
+  layoutFor(id, hyps) {
     const L = LEVELS[id] || LEVELS['1.30']; const b = L.build(this);
-    const extra = ((b.vars ? 1 : 0) + (b.hyps && b.hyps.length ? 1 : 0)) * 58;
+    if (!hyps) { const pl = this.prog.places[L.id]; const e = pl && pl.entries && pl.entries[pl.idx]; hyps = (e && e.hyps) || b.hyps || []; }
+    const rows = (b.vars ? 1 : 0) + (hyps.some(h => !h.wit) ? 1 : 0) + hyps.filter(h => h.wit).length;
+    const extra = rows * 58;
     Object.assign(this.K, { AY: 84, GY: 192 + extra, ZT: 300 + extra, ZB: 700 + extra });
+  }
+  // the header grew or shrank (a witness line came or went): everything below moves by the same amount
+  relayout(hyps, tops) {
+    const old = this.K.ZT; this.layoutFor(this.state.level, hyps);
+    const d = this.K.ZT - old;
+    if (d) tops.forEach(t => { t.y += d; });
+    return tops;
   }
   loadLevel(id) {
     const L = LEVELS[id] || LEVELS['1.30'];
@@ -176,6 +186,7 @@ export class Range extends Component {
     this.savePlace();
     this.layoutFor(id);
     const L = this.loadLevel(id);
+    this.layoutFor(id, L.hyps);
     this.hist = L.hist; this._histKey = null; this._resync = true;
     this.setState({ level: id, goal: L.goal, hyps: L.hyps, vars: L.vars, scalars: L.scalars, tops: this.normTops(this.tidy(L.tops)), tree: null, trayClosing: true, histAnim: true, zeroHover: null, preview: null });
     clearTimeout(this._tc); this._tc = setTimeout(() => this.setState({ trayOpen: false, trayClosing: false, trayTab: 'tray' }), 220);
@@ -214,6 +225,7 @@ export class Range extends Component {
     this._restoring = R;
     const lv = LEVELS[this.state.level];
     const hyps = entry.hyps ? this.clone(entry.hyps) : (lv ? (lv.build(this).hyps || []) : (this.state.hyps || []));
+    if (!this.props.demo) this.layoutFor(this.state.level, hyps); // the header for that moment, then the row under it
     this.setState({ hyps: hyps, tops: this.normTops(this.tidy(this.clone(entry.tops))), histAnim: true, zeroHover: null, preview: null, slide: null, slides: {} });
     clearTimeout(this._ha); this._ha = setTimeout(() => this.setState({ histAnim: false }), 450);
   }
@@ -1544,6 +1556,14 @@ export class Range extends Component {
     const side = ns => ns.map(n => this.label(n)).join(' + ');
     this.flash(this.P.get(H.ids[0]), H.label + ': ' + side(H.dir === 'fwd' ? this.state.hyps.find(h => h.name === H.name).lhs : H.to) + ' = ' + side(H.dir === 'fwd' ? H.to : this.state.hyps.find(h => h.name === H.name).lhs), 'ok');
   }
+  // a hypothesis dragged straight from ASSUMPTIONS (a tap still switches the tiles there)
+  hypDown(h, text) {
+    return e => {
+      if (e && e.stopPropagation) e.stopPropagation();
+      const f = this.fingerAt(e);
+      this.hdrag = { hyp: h, sx: e.clientX, sy: e.clientY, fx: f.x, fy: f.y, x: f.x, y: f.y, moved: false, text: text.replace(/^\(|\)$/g, ''), quiet: true };
+    };
+  }
   hmove(e) {
     const d = this.hdrag; const w = this.worldDelta(e, d);
     if (!d.moved && Math.abs(w.dx) + Math.abs(w.dy) < 8) return;
@@ -1554,6 +1574,7 @@ export class Range extends Component {
     const d = this.hdrag; this.hdrag = null;
     const hit = d.moved ? this.state.zeroHover : null;
     this.setState({ zeroHover: null, hdragAt: null });
+    if (!d.moved && d.quiet) return;
     if (!d.moved) { this.flash({ x: 40, y: this.K.ZT }, 'Drag ' + d.hyp.label + ' onto either side of it on the board: that part becomes the other side', 'info'); return; }
     if (hit && hit.hyp) this.applyHyp(hit);
   }
@@ -1601,7 +1622,14 @@ export class Range extends Component {
     const slides = {}; slides[r.a.id] = { x: d.x, y: d.y, top: true }; slides[r.b.id] = { x: d.x, y: d.y };
     this._hint = hit.one ? ['arith'] : wHyp ? [wHyp.name] : ['add_neg_cancel'];
     if (r.key) this._splitGroup = { key: r.key, parts: [[r.a.id], [r.b.id]] };
-    this.setState(Object.assign({ tops: this.normTops(tops), slides: slides }, wHyp ? { hyps: (this.state.hyps || []).concat([wHyp]) } : {}));
+    let newHyps = null;
+    if (wHyp) {
+      // the witness gets its own ASSUMPTIONS line: GOAL, EXPRESSION and the board's tiles (and the slide-in) move down by it
+      newHyps = (this.state.hyps || []).concat([wHyp]);
+      const before = this.K.ZT; this.relayout(newHyps, tops); const d = this.K.ZT - before;
+      Object.keys(slides).forEach(k => { slides[k].y += d; });
+    }
+    this.setState(Object.assign({ tops: this.normTops(tops), slides: slides }, newHyps ? { hyps: newHyps } : {}));
     clearTimeout(this._ss);
     this._ss = setTimeout(() => this.setState({ slides: {} }), 650);
     const a = this.label(r.a), b = this.label(r.b);
@@ -1825,7 +1853,7 @@ export class Range extends Component {
       if (q || this.flagged(n) || n.wit) out.edges.push({ x1: p.cx, y1: p.top, x2: q ? q.cx : p.cx, y2: y2 });
       if (n.wit) {
         const x2 = q ? q.cx : p.cx;
-        out.wraps.push({ key: n.id + ':wit', kind: 'wit', op: n.id, x: p.cx + (x2 - p.cx) / 2 - R0, y: p.top + (y2 - p.top) / 2 - R0 });
+        out.wraps.push({ key: n.id + ':wit', kind: 'wit', op: n.id, x: p.cx + (x2 - p.cx) / 2 - 64, y: p.top + (y2 - p.top) / 2 - 16 });
         const ids = new Set(sub(n)); const ns = out.nodes.filter(m => ids.has(m.key));
         const x0 = Math.min(...ns.map(m => m.x)), x1 = Math.max(...ns.map(m => m.x + m.w)), y0 = Math.min(...ns.map(m => m.y)), y1 = Math.max(...ns.map(m => m.y + m.h));
         out.boxes.push({ key: n.id + ':box', x: x0 - 9, y: y0 - 9, w: x1 - x0 + 18, h: y1 - y0 + 18, wit: true });
@@ -1887,7 +1915,7 @@ export class Range extends Component {
     const TV = St.tree ? this.treeVals(St.tree.root) : null;
     const hypsY = 64 + rows * 104;
     const hyps = (St.hyps || []).map((h, i) => {
-      const text = h.label + ' : ' + h.lhs.map(n => this.label(n)).join(' + ') + ' = ' + h.rhs.map(n => this.label(n)).join(' + ');
+      const text = h.label + ' : ' + this.exprText(h.lhs, true) + ' = ' + this.exprText(h.rhs, true);
       return { text: text, x: 22 + i * 252, y: hypsY,
         down: e => { stop(e); const f = this.fingerAt(e); this.hdrag = { hyp: h, sx: e.clientX, sy: e.clientY, fx: f.x, fy: f.y, x: f.x, y: f.y, moved: false, text: text }; } };
     });
@@ -1962,16 +1990,18 @@ export class Range extends Component {
       rowsA.push(base);
       rowsA.push([].concat(...St.vars.map((x, i) => (i ? [['  ']] : []).concat([decl(x)]))));
     } else rowsA.push(base.concat([['   '], decl(['𝑣', 'v'])]));
-    if (St.hyps && St.hyps.length) {
-      const side = ns => ns.map(n => this.elText(n)).join(' + ');
-      rowsA.push([].concat(...St.hyps.map((h, i) => (i ? [['   ']] : []).concat([['(' + h.label + ' : ' + side(h.lhs) + ' = ' + side(h.rhs) + ')']]))));
-    }
+    const side = ns => this.exprText(ns, true); // the readout's notation
+    const htext = h => '(' + h.label + ' : ' + side(h.lhs) + ' = ' + side(h.rhs) + ')';
+    const own = (St.hyps || []).filter(h => !h.wit), wits = (St.hyps || []).filter(h => h.wit);
+    if (own.length) rowsA.push([].concat(...own.map((h, i) => (i ? [['   ']] : []).concat([[htext(h), null, { hyp: h }]]))));
+    // a witness from the inverse axiom: its vector and its hypothesis, on a line of their own
+    wits.forEach(h => { const w = h.lhs[h.lhs.length - 1]; rowsA.push([decl([w.el, w.key]), ['   '], [htext(h), null, { hyp: h }]]); });
     const goal = this.nodeTokens(St.goal);
     const build = (key, title, y, rowsIn) => {
       const on = !!(St.tiles && St.tiles[key]);
-      const mk = list => list.map(([t, tile]) => {
+      const mk = list => list.map(([t, tile, opt]) => {
         const tw = this.textW(t);
-        if (!tile) return { t: t, w: tw };
+        if (!tile) return { t: t, w: tw, hyp: opt && opt.hyp ? opt.hyp : null };
         let W, html_ = null, padL = 0, fg = '#16130C';
         if (tile.kind === 'decl') {
           // text: ( 𝑣 : 𝑉 ) in a row. Tile: the 𝑣 tile; 𝑣 stays the same size at the tile's element (it only slides
@@ -2045,7 +2075,7 @@ export class Range extends Component {
     <div onClick=${h.toggle} role="button" aria-pressed=${h.on ? 'true' : 'false'} aria-label=${h.title + ': tap to show or hide the tiles'} style=${`position: absolute; left: 14px; top: ${h.y}px; padding: 0 14px; min-width: 260px; pointer-events: auto; cursor: pointer; z-index: 5`}>
       <div style=${`font-family: Inter, system-ui, sans-serif; font-size: 14px; font-weight: 700; letter-spacing: 0.12em; color: ${title}`}>${h.title}</div>
       ${h.rows.map((row, ri) => html`<div style=${`position: relative; height: 58px; margin-top: ${ri ? 0 : 10}px; display: flex; white-space: pre; font-family: 'STIX Two Text', 'Cambria Math', 'Times New Roman', serif; font-size: 24px; color: #E2E8F0`}>
-        ${row.map(k => !k.tile ? html`<span style="flex: 0 0 auto; padding-top: 14px; height: 30px; line-height: 30px">${k.t}</span>` : html`
+        ${row.map(k => !k.tile ? html`<span onPointerDown=${k.hyp ? this.hypDown(k.hyp, k.t) : null} style=${`flex: 0 0 auto; padding-top: 14px; height: 30px; line-height: 30px; ${k.hyp ? 'color: #BAE6FD; cursor: grab; touch-action: none' : ''}`}>${k.t}</span>` : html`
           <span style=${`position: relative; flex: 0 0 auto; height: 58px; width: ${k.width}px; transition: width 0.35s ease ${k.on ? '0s' : '0.2s'}`}>
             <span style=${`position: absolute; left: 0; top: 0; width: 100%; height: 100%; transform: scale(${k.on ? 1 : 0}); transform-origin: 50% 40%; transition: transform 0.32s cubic-bezier(0.2, 1.5, 0.4, 1) ${k.on ? '0.22s' : '0s'}; pointer-events: none`}>
               ${k.tile.kind === 'para' ? html`
@@ -2091,7 +2121,7 @@ export class Range extends Component {
   // subtrees; whatever was just removed pops out where it was.
   treeHtml(T) {
     const wrap = w => w.kind === 'wit'
-      ? html`<span style="display: flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: 17px; background: rgba(8,51,68,1); border: 2px solid #22D3EE; color: #CFFAFE; font-family: 'STIX Two Text', serif; font-size: 16px">∃<i>w</i></span>`
+      ? html`<span style="position: relative; display: flex; align-items: center; justify-content: center; gap: 3px; width: 128px; height: 32px; box-sizing: border-box; border-radius: 16px; background: rgba(8,51,68,1); border: 2px solid #22D3EE; color: #CFFAFE; font-family: 'STIX Two Text', serif; font-size: 16px; white-space: nowrap">∃<i>w</i>, <span style="display: inline-block; width: 11px; height: 11px; border: 1.5px solid #67E8F9; border-radius: 2px"></span> + <i>w</i> = 0</span>`
       : w.kind === 'neg'
       ? html`<span style=${`display: flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: 17px; background: ${w.night}; border: 1.5px solid rgba(255,255,255,0.35); color: #F8FAFC; font-size: 24px; font-weight: 600`}>−</span>`
       : html`<span style="display: flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: 17px; background: rgba(27,37,58,1); border: 2px solid #F2B33D; color: #FDE68A; font-family: 'STIX Two Text', serif; font-size: 19px"><i>x</i><sup style="font-size: 11px; margin-left: 1px; transform: translateY(-1px)">−1</sup></span>`;

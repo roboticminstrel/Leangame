@@ -1171,3 +1171,41 @@ test('level 1.31: 𝑎0 = 0 the same way, with a symbolic scalar 𝑎', () => {
   assert.equal(c.renderVals().won, true);
   assert.ok(c.prog.done.includes('1.31'));
 });
+
+test('a witness adds its own ASSUMPTIONS line; GOAL, EXPRESSION and the tiles move down by exactly that, and back on undo', () => {
+  const c = makeFresh(); after(c);
+  dragPiece(c, 'PZ', ...centre(c, c.state.tops[0].node.vec.id)); after(c);     // 0𝑣 + 0
+  const ZT0 = c.K.ZT, GY0 = c.K.GY;
+  const ys = () => c.state.tops.map(t => { const p = c.P.get(t.node.id); return Math.round(p.y + p.h / 2); });
+  const before = ys();
+  tap(c, c.state.tops[0].node.vec.id); tapTree(c, '·');
+  assert.deepEqual(c.renderVals().tray.tree.wraps.map(w => w.kind), ['wit'], 'the existence bubble');
+  const z = c.state.tops.find(t => t.node.key === 'zero').node;
+  dragTree(c, 'wit', ...centre(c, z.id)); after(c);
+  const v = c.renderVals();
+  assert.equal(c.K.ZT - ZT0, 58); assert.equal(c.K.GY - GY0, 58);
+  const row = v.heads[0].rows[v.heads[0].rows.length - 1];
+  assert.equal(row.map(k => k.t).join(''), '(𝑤₁ : 𝑉)   (h₁ : 0𝑣 + 𝑤₁ = 0)');
+  assert.ok(row.find(k => k.hyp), 'its hypothesis can be dragged from there');
+  // every tile is still in the expression, one row, below the readout
+  assert.equal(c.zoneIds.length, c.state.tops.length);
+  const now = ys();
+  assert.equal(new Set(now).size, 1, 'one row');
+  assert.ok(now[0] >= before[0] + 58 - 1, 'the row moved down with the header');
+  // drag the hypothesis from ASSUMPTIONS onto 0𝑣 (with 𝑤₁ after it): the pair becomes 0 … after factoring; here just check the hover
+  c.renderVals().hist.undo(); after(c);
+  assert.equal(c.K.ZT, ZT0, 'undo takes the line away and everything moves back up');
+  assert.equal(c.zoneIds.length, c.state.tops.length);
+});
+
+test('a hypothesis dragged from ASSUMPTIONS rewrites like its card', () => {
+  const c = makeLive({ store: memoryStore({ done: DONE0, current: '1.27', places: {} }) }); after(c);
+  dragPiece(c, 'PZ', ...centre(c, c.state.tops[0].node.id)); after(c);         // 𝑤 + 0
+  const tok = c.renderVals().heads[0].tokens.find(k => k.hyp && k.hyp.label === 'h′');
+  const z = c.state.tops.find(t => t.node.key === 'zero').node;
+  const [tx, ty] = centre(c, z.id);
+  c.hypDown(tok.hyp, tok.t)(ev(0, 0)); c.hmove(ev(tx / 2, ty / 2)); c.renderVals(); c.hmove(ev(tx, ty)); c.renderVals();
+  assert.equal(c.state.zeroHover && c.state.zeroHover.id, z.id);
+  c.hend(); after(c);
+  assert.deepEqual(readout(c), ['𝑤 + 𝑣 + 𝑤′']);
+});
