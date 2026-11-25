@@ -14,6 +14,7 @@ The Range started as one tab of a larger design-canvas prototype: a chapter 1–
 - **Vector**: a blue arrow with a type band (𝑉, 𝑈 ⊂ ℝ³) and the element. Its left **field edge** (gold band plus cream body) shows a sunken 𝐅 when abstract, or a raised ℝ/ℂ parallelogram strip. Holding the strip removes it. A docked scalar fully covers the edge.
 - **Negative tiles are night tiles**: the top band stays, the face goes dark in its type's tint (scalars `#3B2C12`, vectors `#182654`), and the minus is always written (`−1`, `−𝑣`). A vector's 𝐅 edge stays in day colours. Scalars are negative by value; a vector is `neg: true` (the additive inverse −𝑣, distinct from `(−1)𝑣`). `isNeg`, `look`, `elText`; mockup at `src/mock/tiles.html`.
 - **Readout**: the expression as plain text from the tree (`exprText`), literal on purpose: `−1𝑣` and `−𝑣` stay different until the player simplifies. Rules mode only; the tray holds just `0` in ℝ and `0` in 𝑉. (`props.legacy` keeps the old Sandbox board for tests.)
+- **Rows are the player's**: a new term (e.g. an added 0) stays in its target's row, even past the board's edge; the board scrolls. No automatic wrapping until James decides on a way to do it.
 - **Products**: scalars overlap tip to tip with a · badge. Dragging a vector drags its docked scalars along.
 - **Sums** are brackets:
   - gold, thick, for scalar sums, with an ℝ tag on the right at band level

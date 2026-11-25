@@ -378,20 +378,17 @@ test('negative tiles are night tiles: −1 has a dark face and keeps its minus; 
   assert.notEqual(c.sig(c.state.tops[1].node), c.sig(T.vec), '−𝑣 and 𝑣 are different tiles');
 });
 
-test('a 0 added after a wide term wraps to the next row instead of landing off screen', () => {
+test('a 0 added after a wide term stays in its row, past the edge if need be (the board scrolls)', () => {
   const c = makeLive();
   const v = c.state.tops[1].node.vec;
   dragPiece(c, 'PZ', ...centre(c, v.id));                 // (2 + 3)𝑣 + −1𝑣 + 0
   const z = c.state.tops.find(t => t.node.key === 'zero').node;
-  const v0 = c.state.tops[0].node.vec;
-  const hover = dragTo(c, z.id, ...centre(c, v0.id)) || null; // drag that 0 onto (2 + 3)𝑣
+  const T0 = c.state.tops[0].node;
+  dragTo(c, z.id, ...centre(c, T0.vec.id));               // drag that 0 onto (2 + 3)𝑣
   assert.deepEqual(readout(c), ['(2 + 3)𝑣 + 0 + −1𝑣']);
   c.renderVals();
-  c.state.tops.forEach(t => { const p = c.P.get(t.node.id); assert.ok(p.x >= 0 && p.x + p.w <= 560, show(t.node) + ' is on the board'); });
-  const zp = c.P.get(z.id); assert.ok(zp.y > c.P.get(c.state.tops.find(t => show(t.node) === '(2 + 3)·𝑣').node.id).y, 'the 0 starts the next row');
-  // and a fresh 0 from the tray onto the same wide term
-  dragPiece(c, 'PZ', ...centre(c, v0.id));
-  assert.deepEqual(readout(c), ['(2 + 3)𝑣 + 0 + 0 + −1𝑣']);
-  c.renderVals();
-  c.state.tops.forEach(t => { const p = c.P.get(t.node.id); assert.ok(p.x + p.w <= 560 && c.zoneIds.includes(t.node.id), show(t.node) + ' is on the board, in the expression'); });
+  const tp = c.P.get(T0.id), zp = c.P.get(z.id);
+  assert.ok(Math.abs((zp.y + zp.h / 2) - (tp.y + tp.h / 2)) < 2, 'same row as (2 + 3)𝑣');
+  assert.ok(zp.x > tp.x + tp.w, 'right after it');
+  assert.ok(c.zoneIds.includes(z.id), 'still in the expression');
 });
