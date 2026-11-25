@@ -25,6 +25,13 @@ export function nodeState(id, done, active) {
   return n.deps.some(d => done.has(d)) && n.deps.every(d => done.has(d) || open(d)) ? 'partial' : 'hidden';
 }
 // the statement without its proof: the blocks before the first proof block
+// the faded lines toward hidden nodes, for a given progress: [from, to]
+export function stubsFor(done, active) {
+  const st = id => nodeState(id, done, active);
+  const out = [];
+  NODES.filter(n => st(n.id) === 'hidden').forEach(n => n.deps.forEach(d => { if (done.has(d)) out.push([d, n.id]); }));
+  return out;
+}
 export const withoutProof = f => { const i = f.findIndex(b => b[0] === 'pr'); return i < 0 ? f : f.slice(0, i); };
 
 export class ConceptGraph extends Component {
@@ -60,6 +67,14 @@ export class ConceptGraph extends Component {
       edges.push({ key: d + '>' + n.id + (pulsing ? ':' + pulse.k : ''), x1: COLS[a.col], y1: rowY(a.row) + CH, x2: COLS[n.col], y2: rowY(n.row),
         color: missing ? '#CBD5E1' : '#94A3B8', dash: missing ? '4 4' : 'none', pulsing: pulsing });
     }));
+    // a finished node leading to one still hidden (not all its prerequisites on screen): the line starts out toward
+    // it and fades away, without revealing the node
+    const stubs = [];
+    NODES.filter(n => st(n.id) === 'hidden').forEach(n => n.deps.filter(d => done.has(d) && byId[d]).forEach(d => {
+      const a = byId[d]; const x1 = COLS[a.col], y1 = rowY(a.row) + CH, X = COLS[n.col], Y = rowY(n.row);
+      const f = Math.min(1, 70 / Math.max(1, Math.hypot(X - x1, Y - y1)));
+      stubs.push({ id: 'stub-' + d.replace('.', '_') + '-' + n.id.replace('.', '_'), x1: x1, y1: y1, x2: x1 + (X - x1) * f, y2: y1 + (Y - y1) * f });
+    }));
     const look = n => {
       const def = n.kind === 'def';
       if (st(n.id) === 'next') return { bg: '#F1F5F9', fg: '#64748B', idFg: '#94A3B8', border: '1.5px solid #CBD5E1' };
@@ -85,6 +100,8 @@ export class ConceptGraph extends Component {
           <div style="position: absolute; left: 16px; top: 10px; font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: #64748B">${label}</div>
         </div>`)}
       <svg width="390" height=${H} style="position: absolute; left: 0; top: 0; pointer-events: none" aria-hidden="true">
+        <defs>${stubs.map(t => html`<linearGradient key=${t.id} id=${t.id} gradientUnits="userSpaceOnUse" x1=${t.x1} y1=${t.y1} x2=${t.x2} y2=${t.y2}><stop offset="0" stop-color="#94A3B8" stop-opacity="1"></stop><stop offset="1" stop-color="#94A3B8" stop-opacity="0"></stop></linearGradient>`)}</defs>
+        ${stubs.map(t => html`<line key=${t.id} x1=${t.x1} y1=${t.y1} x2=${t.x2} y2=${t.y2} stroke=${'url(#' + t.id + ')'} stroke-width="1.5" stroke-linecap="round"></line>`)}
         ${edges.map(e => html`<line key=${e.key} x1=${e.x1} y1=${e.y1} x2=${e.x2} y2=${e.y2} stroke=${e.color} stroke-width="1.5" stroke-dasharray=${e.dash} style=${e.pulsing ? 'animation: edgePulse 0.6s ease-in-out 2' : ''}></line>`)}
       </svg>
       ${VIS.map(n => {

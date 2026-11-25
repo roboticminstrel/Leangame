@@ -987,3 +987,16 @@ test('graph: a node with some prerequisites done shows (dotted from the missing 
   assert.equal(nodeState('1.32', done, '1.32'), 'active');
   assert.equal(nodeState('1.32', done, '1.30'), 'next');
 });
+
+test('graph: a finished node leading to a still-hidden one shows a fading line, not the node', async () => {
+  const { nodeState, stubsFor } = await import('../src/graph/ConceptGraph.js');
+  // 1.33 and 1.36 done, 1.32 not: 1.34 isn't ready, so 1.40 (needs 1.36 and 1.34) stays hidden
+  const done = new Set([...levelsMod.START_DONE, '1.33', '1.36']);
+  assert.equal(nodeState('1.40', done, '1.30'), 'hidden');
+  assert.deepEqual(stubsFor(done, '1.30').filter(([d, n]) => n === '1.40'), [['1.36', '1.40']], 'a line fades out from 1.36 toward it');
+  assert.ok(stubsFor(done, '1.30').every(([d, n]) => done.has(d) && nodeState(n, done, '1.30') === 'hidden'));
+  // once 1.32 is done too, 1.34 is ready, so 1.40 shows (partly unlocked) and its stub becomes a real line
+  done.add('1.30'); done.add('1.32');
+  assert.equal(nodeState('1.40', done, '1.34'), 'partial');
+  assert.equal(stubsFor(done, '1.34').filter(([d, n]) => n === '1.40').length, 0);
+});
