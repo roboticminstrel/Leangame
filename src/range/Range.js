@@ -36,8 +36,8 @@ export class Range extends Component {
       return Object.assign(base, {
         rules: true, trayOpen: false, trayTab: 'tray',
         tops: [
-          { node: this.mkProd([g], this.mkV('𝑉', '𝑣', 'v', 'R', 140)), x: 24, y: 164 },
-          { node: this.mkProd([this.mkS('R', '−1', '-1')], this.mkV('𝑉', '𝑣', 'v', 'R', 140)), x: 214, y: 352 }
+          { node: this.mkProd([g], this.mkV('𝑉', '𝑣', 'v', 'R', 140)), x: 24, y: 236 },
+          { node: this.mkProd([this.mkS('R', '−1', '-1')], this.mkV('𝑉', '𝑣', 'v', 'R', 140)), x: 214, y: 404 }
         ],
         pieces: [
           { id: 'PZS', kind: 'zeroS', field: 'R', x: 30, y: 600, hx: 30, hy: 600 },
@@ -1142,6 +1142,19 @@ export class Range extends Component {
       pick: tab => () => this.setState({ trayTab: tab })
     };
   }
+  // The dotted box around the expression: it hugs the expression's tiles (growing and shrinking as they move, so it
+  // shows when part of the expression is off screen) and always holds the EXPRESSION heading and the readout under it.
+  zoneBox(readout) {
+    const K = this.K;
+    const textW = readout ? Math.min(520, 34 + 13.2 * readout.main.length) : 140;
+    const box = { l: 14, r: Math.max(28 + 130, 28 + textW) + 16, t: K.ZT, b: K.ZT + (readout ? 34 + (readout.note ? 64 : 46) : 30) + 20 };
+    this.zoneIds.forEach(id => {
+      const p = this.P.get(id); if (!p) return;
+      box.l = Math.min(box.l, p.x - 24); box.r = Math.max(box.r, p.x + p.w + 24);
+      box.t = Math.min(box.t, p.y - 24); box.b = Math.max(box.b, p.y + p.h + 24);
+    });
+    return box;
+  }
   /* ---------- render ---------- */
   vecHtml(t) {
     return html`
@@ -1181,8 +1194,7 @@ export class Range extends Component {
     this._glow = St.preview && (St.preview.type === 'collect' || St.preview.type === 'collectV') ? new Set(St.preview.glow) : null;
     if (St.zeroHover) this._glow = new Set(St.zeroHover.glow || [St.zeroHover.id]);
     const R = this.layout(St.tops);
-    const zb = { l: 10, r: 550 };
-    this.zoneIds.forEach(id => { const p = this.P.get(id); if (p) { zb.l = Math.min(zb.l, p.x - 24); zb.r = Math.max(zb.r, p.x + p.w + 24); } });
+    const zb = { l: 10, r: 550, t: this.K.ZT, b: this.K.ZB }; // set below, once the readout is known
     const results = [];
     // While a tile is being dragged, the readout stays as it was when the drag began, with the moving part (and
     // what it would act on) glowing; it changes once the move is done.
@@ -1198,8 +1210,9 @@ export class Range extends Component {
       const green = { bg: 'rgba(52,211,153,0.16)', border: '#34D399', fg: '#D1FAE5' };
       this.zoneValue = ro.ok ? '= ' + this.fmtVal(ro.val) : null; // the old readout, still used by the tests
       const main = segs.map(x => x.t).join('');
-      results.push(Object.assign({ x: 24, y: 470, main: main, segs: segs, note: ro.ok ? '' : 'terms in the expression need the same type' }, ro.ok ? green : red));
+      results.push(Object.assign({ x: 28, y: this.K.ZT + 34, main: main, segs: segs, note: ro.ok ? '' : 'terms in the expression need the same type' }, ro.ok ? green : red));
     }
+    Object.assign(zb, this.zoneBox(results[0]));
     const ghosts = [];
     const HEXC = 'polygon(22px 0, calc(100% - 22px) 0, 100% 50%, calc(100% - 22px) 100%, 22px 100%, 0 50%)';
     if (St.preview && St.preview.type === 'expandV' && this.drag) {
@@ -1248,7 +1261,7 @@ export class Range extends Component {
       baseScale: this.fitScale(), overlayH: (St.bh || 716) / this.fitScale(),
       zoomIn: () => this.zoomAround(this.state.zoom * 1.25), zoomOut: () => this.zoomAround(this.state.zoom / 1.25),
       zoomReset: () => this.setState({ zoom: 1, panX: 0, panY: 0 }), showReset: Math.abs(St.zoom - 1) > 0.01 || St.panX !== 0 || St.panY !== 0, zoomPct: Math.round(St.zoom * 100),
-      zoneL: zb.l, zoneW: zb.r - zb.l,
+      zoneL: zb.l, zoneW: zb.r - zb.l, zoneT: zb.t, zoneH: zb.b - zb.t,
       ghosts: ghosts, groups: R.groups, pluses: R.pluses,
       vecs: R.vecs.concat(this.props.legacy || zDrag ? [zeroTile] : []), hexes: R.hexes.concat(this.props.legacy || zsDrag ? [zeroHex] : []),
       tray: this.props.legacy ? null : this.trayVals(zs, zp, zeroHex, zeroTile), dots: R.dots, strips: strips,
@@ -1276,7 +1289,7 @@ export class Range extends Component {
     <div onPointerDown=${v.panDown} aria-hidden="true" style="position: absolute; left: -4020px; top: -4020px; width: 9000px; height: 9000px; touch-action: none; cursor: grab; background-image: radial-gradient(rgba(148,163,184,0.22) 1.4px, transparent 2px); background-size: 30px 30px"></div>
 
 
-    <div style=${`position: absolute; left: ${v.zoneL}px; top: 126px; width: ${v.zoneW}px; height: 400px; box-sizing: border-box; border-radius: 24px; border: 2px dashed rgba(148,163,184,0.28); pointer-events: none`}></div>
+    <div style=${`position: absolute; left: ${v.zoneL}px; top: ${v.zoneT}px; width: ${v.zoneW}px; height: ${v.zoneH}px; box-sizing: border-box; border-radius: 24px; border: 2px dashed rgba(148,163,184,0.28); pointer-events: none; transition: left 0.2s ease, top 0.2s ease, width 0.2s ease, height 0.2s ease`}></div>
     <div style="position: absolute; left: 28px; top: 136px; font-family: Inter, system-ui, sans-serif; font-size: 14px; font-weight: 700; letter-spacing: 0.12em; color: #94A3B8; pointer-events: none">EXPRESSION</div>
     ${v.legacy ? html`<div style=${`position: absolute; left: 10px; top: 546px; width: 540px; height: ${v.trayH}px; box-sizing: border-box; border-radius: 24px; border: 2px dashed rgba(148,163,184,0.28); background: rgba(255,255,255,0.02); opacity: ${v.trayOp}; pointer-events: none`}></div>
     <div style="position: absolute; left: 28px; top: 556px; font-family: Inter, system-ui, sans-serif; font-size: 14px; font-weight: 700; letter-spacing: 0.12em; color: #94A3B8; pointer-events: none">TRAY</div>` : null}

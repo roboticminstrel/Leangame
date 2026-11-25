@@ -504,3 +504,24 @@ test('tray popup: opens with two tabs; a 0 dragged out of it lands on the board,
   assert.equal(v.tray.show, true, 'back after the drop');
   v.tray.toggle(); assert.equal(c.renderVals().tray.open, false);
 });
+
+test('the expression box hugs its tiles and always holds the heading and readout', () => {
+  const c = makeLive();
+  let v = c.renderVals();
+  const head = { l: 28, t: c.K.ZT };
+  const inBox = (b, x, y) => x >= b.zoneL && x <= b.zoneL + b.zoneW && y >= b.zoneT && y <= b.zoneT + b.zoneH;
+  assert.ok(inBox(v, head.l, head.t + 10), 'heading inside');
+  assert.equal(v.results[0].y, c.K.ZT + 34, 'readout right under the heading');
+  const r0 = v.zoneL + v.zoneW;
+  // drag (2 + 3)𝑣 far right (staying in the expression's band): the box grows right
+  const T0 = c.state.tops[0].node; c.renderVals(); const p = c.P.get(T0.id);
+  c.begin(T0.vec.id, 'self', ev(0, 0)); c.move(ev(150, 0)); c.renderVals(); c.move(ev(300, 0)); c.end();
+  v = c.renderVals();
+  assert.ok(v.zoneL + v.zoneW > r0 + 250, 'grew to the right');
+  // and far left: grows left, still holding the heading
+  c.begin(T0.vec.id, 'self', ev(0, 0)); c.move(ev(-300, 0)); c.renderVals(); c.move(ev(-700, 0)); c.end();
+  v = c.renderVals();
+  assert.ok(v.zoneL < -300, 'grew to the left');
+  assert.ok(inBox(v, head.l, head.t + 10) && inBox(v, 28 + 200, c.K.ZT + 60), 'heading and readout still inside');
+  assert.ok(v.zoneL + v.zoneW < r0 + 250, 'and shrank back on the right');
+});
