@@ -486,11 +486,20 @@ export class Range extends Component {
     const loc = this.locate(tops, id); if (!loc) return;
     const abs = this.P.get(id) || { x: 0, y: 0, w: 96, h: 88 };
     const d = { id: id, role: role, sx: e.clientX, sy: e.clientY, moved: false, tops: tops, orig: this.clone(this.state.tops), rules: this.state.rules, gx: abs.x, gy: abs.y, gw: abs.w, gh: abs.h };
-    // a 0 tile on its own (the tray's 0 in ℝ, or a vector 0 left over): over a matching term or bracket it adds + 0
+    // Zeros. A 0 that's a term of a sum (in the expression, or inside a bracket) is in play: dropped on another term
+    // of the same sum, it's absorbed (x + 0 = x). A 0 on its own outside any sum (the old tray's loose tile) adds
+    // + 0 to what it's dropped on, like the tray pieces.
     const zn = loc.node;
-    if (loc.kind === 'top' && role === 'self' && ((zn.t === 's' && zn.val === '0') || (zn.t === 'v' && zn.key === 'zero'))) {
-      const zt = this.typeOf(zn);
-      d.zero = { kind: zt.k, f: zt.f, sp: zt.sp };
+    const isZero = (zn.t === 's' && zn.val === '0') || (zn.t === 'v' && zn.key === 'zero');
+    if (isZero && role === 'self') {
+      const inZone = loc.kind === 'top' && this.zoneIds.indexOf(zn.id) >= 0;
+      if (loc.kind === 'term' || inZone) {
+        const chain = loc.kind === 'term' ? loc.parent.terms.map(t => t.node.id) : this.zoneIds.slice();
+        d.absorb = { chain: chain.filter(x => x !== zn.id) };
+      } else if (loc.kind === 'top') {
+        const zt = this.typeOf(zn);
+        d.zero = { kind: zt.k, f: zt.f, sp: zt.sp };
+      }
     }
     if (d.rules) {
       if (loc.kind === 'factor') { d.mode = loc.parent.vec ? 'reorder' : 'pending'; d.prodId = loc.parent.id; d.ax = abs.x; d.ay = abs.y; d.w = abs.w; }
@@ -537,7 +546,8 @@ export class Range extends Component {
       if (d.mode === 'sand') this.detach(d);
       this.setState({ dragIds: this.dragSet(d), holding: null });
     }
-    d.zeroHover = d.zero ? this.zeroTarget(d.gx + dx + d.gw / 2, d.gy + dy + d.gh / 2, d.zero.kind, Object.assign({ exclude: d.id }, d.zero)) : null;
+    d.zeroHover = d.zero ? this.zeroTarget(d.gx + dx + d.gw / 2, d.gy + dy + d.gh / 2, d.zero.kind, Object.assign({ exclude: d.id }, d.zero))
+      : d.absorb ? this.absorbTarget(d, d.gx + dx + d.gw / 2, d.gy + dy + d.gh / 2) : null;
     const pv = d.rules && !d.zeroHover ? this.findPreview(d, d.gx + dx + d.gw / 2, d.gy + dy + d.gh / 2) : null;
     d.preview = pv;
     if (d.mode === 'reorder' && pv) {
@@ -566,7 +576,7 @@ export class Range extends Component {
     if (!d) return;
     if (!d.moved) { this.setState({ holding: null, dragIds: null }); return; }
     if (this.state.zeroHover) this.setState({ zeroHover: null });
-    if (d.zeroHover && this.dropZero(d)) return;
+    if (d.zeroHover && (d.absorb ? this.absorbZero(d) : this.dropZero(d))) return;
     if (d.rules && d.preview) { this.applyPreview(d); return; }
     if (d.mode === 'reorder') { this.setState({ override: null, dragIds: null, preview: null }); return; }
     if (d.mode === 'move') { this.setState({ dragIds: null, preview: null }); return; }
@@ -907,6 +917,33 @@ export class Range extends Component {
     if (opts.sp && ty.sp !== opts.sp) return null;
     return { id: n.id, sp: ty.sp, f: ty.f, kind: n.t, glow: this.ids(n) };
   }
+  // The term of the 0's own sum under the pointer, if any (the whole term glows)
+  absorbTarget(d, cx, cy) {
+    for (const id of d.absorb.chain) {
+      const loc = this.locate(d.orig, id); const p = this.P.get(id);
+      if (loc && this.inRect(p, cx, cy, 6)) return { id: id, glow: this.ids(loc.node) };
+    }
+    return null;
+  }
+  // x + 0 = x: the 0 leaves its sum. A bracket left holding one term becomes that term.
+  absorbZero(d) {
+    const tops = this.clone(d.orig);
+    const loc = this.locate(tops, d.id); const tl = this.locate(tops, d.zeroHover.id);
+    if (!loc || !tl) return false;
+    const name = this.label(tl.node); const at = this.P.get(d.zeroHover.id);
+    if (loc.kind === 'term') {
+      const S = loc.parent;
+      S.terms.splice(loc.idx, 1);
+      if (S.terms.length === 1) {
+        const sl = this.locate(tops, S.id);
+        if (sl.kind === 'top') tops[sl.ti].x += this.sumPadL(S) + 26 + this.K.SPAD;
+        this.setRef(tops, sl, S.terms[0].node);
+      }
+    } else tops.splice(loc.ti, 1);
+    this.setState({ tops: this.normTops(tops), dragIds: null, preview: null, override: null });
+    this.flash(at, name + ' + 0 = ' + name + ' · additive identity', 'ok');
+    return true;
+  }
   // a 0 tile released over a target: it leaves its spot and joins the target's sum
   dropZero(d) {
     const tops = this.clone(d.tops);
@@ -1169,7 +1206,7 @@ export class Range extends Component {
       trayOp: rules ? 0.5 : 1,
       modeName: rules ? 'RULES' : 'SANDBOX',
       modeLine: rules ? 'Only moves the axioms allow: reorder products, rearrange sums.' : 'Build freely: dock, undock and nest anything.',
-      hint: rules ? 'Drag sideways to reorder · drag a scalar into the brackets beside it, or pull brackets off a vector, to distribute · drop a scalar or vector on a match to factor it out · drag a 0 onto a term to add + 0'
+      hint: rules ? 'Drag sideways to reorder · drag a scalar into the brackets beside it, or pull brackets off a vector, to distribute · drop a scalar or vector on a match to factor it out · drag a 0 from the tray onto a term to add + 0, or a 0 in the expression onto a term of its sum to remove it'
         : 'Scalars dock tip to tip or onto a vector’s edge · drop things inside ( + ) to add them · double-tap a + to tidy'
     };
   }

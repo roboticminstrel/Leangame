@@ -380,13 +380,11 @@ test('negative tiles are night tiles: −1 has a dark face and keeps its minus; 
 
 test('a 0 added after a wide term stays in its row, past the edge if need be (the board scrolls)', () => {
   const c = makeLive();
-  const v = c.state.tops[1].node.vec;
-  dragPiece(c, 'PZ', ...centre(c, v.id));                 // (2 + 3)𝑣 + −1𝑣 + 0
-  const z = c.state.tops.find(t => t.node.key === 'zero').node;
   const T0 = c.state.tops[0].node;
-  dragTo(c, z.id, ...centre(c, T0.vec.id));               // drag that 0 onto (2 + 3)𝑣
+  dragPiece(c, 'PZ', ...centre(c, T0.vec.id));            // (2 + 3)𝑣 + 0 + −1𝑣
   assert.deepEqual(readout(c), ['(2 + 3)𝑣 + 0 + −1𝑣']);
   c.renderVals();
+  const z = c.state.tops.find(t => t.node.key === 'zero').node;
   const tp = c.P.get(T0.id), zp = c.P.get(z.id);
   assert.ok(Math.abs((zp.y + zp.h / 2) - (tp.y + tp.h / 2)) < 2, 'same row as (2 + 3)𝑣');
   assert.ok(zp.x > tp.x + tp.w, 'right after it');
@@ -442,4 +440,44 @@ test('inside a bracket too: (2𝑣 + 3𝑣 + 0) groups the 𝑣 terms and keeps 
   dragTo(c, S.terms[1].node.vec.id, ...centre(c, S.terms[0].node.vec.id));
   const top = c.state.tops[0].node;
   assert.equal(show(top), '½·((2 + 3)·𝑣 + 0)');
+});
+
+test('a 0 in play, dropped on a term of its own sum, is absorbed: −1𝑣 + 0 → −1𝑣', () => {
+  const c = makeLive();
+  const T1 = c.state.tops[1].node;
+  dragPiece(c, 'PZ', ...centre(c, T1.vec.id));             // (2 + 3)𝑣 + −1𝑣 + 0
+  const z = c.state.tops.find(t => t.node.key === 'zero').node;
+  c.renderVals(); const p = c.P.get(z.id); const [tx, ty] = centre(c, T1.vec.id);
+  c.begin(z.id, 'self', ev(0, 0));
+  c.move(ev((tx - p.x - p.w / 2) / 2, (ty - p.y - p.h / 2) / 2)); c.renderVals();
+  c.move(ev(tx - p.x - p.w / 2, ty - p.y - p.h / 2));
+  assert.equal(c.state.zeroHover.id, T1.id, 'the whole term −1𝑣 glows');
+  c.end(); c.renderVals();
+  assert.deepEqual(readout(c), ['(2 + 3)𝑣 + −1𝑣']);
+  assert.match(c.state.flash.text, /−1·𝑣 \+ 0 = −1·𝑣/);
+});
+
+test('a 0 in a bracket is absorbed by a term of that bracket, and only that bracket', () => {
+  const c = makeLive();
+  const G = c.state.tops[0].node.factors[0];
+  dragPiece(c, 'PZS', ...rightBracket(c, G.id));            // (2 + 3 + 0)𝑣
+  const zs = c.state.tops[0].node.factors[0].terms[2].node;
+  // over −1 (another sum): nothing to absorb into
+  c.renderVals(); const p = c.P.get(zs.id); const m1 = c.state.tops[1].node.factors[0]; const q = c.P.get(m1.id);
+  c.begin(zs.id, 'self', ev(0, 0)); c.move(ev((q.x - p.x) / 2, (q.y - p.y) / 2)); c.renderVals(); c.move(ev(q.x - p.x, q.y - p.y));
+  assert.equal(c.state.zeroHover, null);
+  c.end(); c.renderVals();
+  const three = c.state.tops[0].node.factors[0].terms.find(t => t.node.el === '3').node;
+  const z2 = c.state.tops[0].node.factors[0].terms.find(t => t.node.el === '0').node;
+  dragTo(c, z2.id, ...centre(c, three.id));
+  assert.deepEqual(readout(c), ['(2 + 3)𝑣 + −1𝑣']);
+});
+
+test('absorbing the 0 out of a two-term bracket drops the bracket: ½·(𝑣 + 0) → ½·𝑣', () => {
+  const c = makeLive();
+  const v = c.mkV('𝑉', '𝑣', 'v', 'R', 140), z = c.mkV('𝑉', '0', 'zero', 'R', 110);
+  const S = c.mkSum([{ node: v, x: 0, y: 0 }, { node: z, x: 0, y: 0 }]); c.rowArrange(S);
+  c.setState({ tops: [{ node: c.mkProd([c.mkS('R', '½', '½')], S), x: 24, y: 200 }] });
+  dragTo(c, z.id, ...centre(c, v.id));
+  assert.deepEqual(readout(c), ['½𝑣']);
 });
