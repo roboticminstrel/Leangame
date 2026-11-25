@@ -2189,7 +2189,7 @@ export class Range extends Component {
     `)}
 
   </div>
-  <div style=${`position: absolute; left: 0; top: 0; width: 560px; height: ${v.overlayH}px; transform: scale(${v.baseScale}); transform-origin: 0 0; pointer-events: none`}>
+  <div style=${`position: absolute; left: 0; top: 0; width: 560px; height: ${v.overlayH}px; transform: scale(${v.baseScale}); transform-origin: 0 0; pointer-events: none; z-index: 20`}>
     <div style="position: absolute; right: 18px; bottom: 108px; display: flex; flex-direction: column; gap: 10px; pointer-events: auto">
       <button onClick=${v.zoomIn} aria-label="Zoom in" style="width: 60px; height: 60px; border-radius: 30px; border: 1.5px solid rgba(203,213,225,0.45); background: rgba(27,37,58,0.94); color: #E2E8F0; font-family: Inter, system-ui, sans-serif; font-size: 30px; line-height: 1; cursor: pointer">+</button>
       <button onClick=${v.zoomOut} aria-label="Zoom out" style="width: 60px; height: 60px; border-radius: 30px; border: 1.5px solid rgba(203,213,225,0.45); background: rgba(27,37,58,0.94); color: #E2E8F0; font-family: Inter, system-ui, sans-serif; font-size: 30px; line-height: 1; cursor: pointer">−</button>
@@ -2229,7 +2229,7 @@ export class Range extends Component {
     ` : null}
   </div>
   ${v.hist ? html`
-    <div style="position: absolute; left: 12px; top: 12px; right: 12px; display: flex; align-items: flex-start; gap: 8px; z-index: 1000; pointer-events: none">
+    <div style="position: absolute; left: 12px; top: 12px; right: 12px; display: flex; align-items: flex-start; gap: 8px; z-index: 10; pointer-events: none">
       <div style="pointer-events: auto; min-width: 0; flex: 0 1 auto">${this.props.lean ? html`<${LeanPlay} lean=${this.props.lean} inline=${true} />` : null}</div>
       ${[['rewind', 'Back to the start', v.hist.canUndo, v.hist.rewind, 'M7 6v12M19 6l-9 6 9 6z'], ['undo', 'Undo', v.hist.canUndo, v.hist.undo, 'M15 6l-7 6 7 6'], ['redo', 'Redo', v.hist.canRedo, v.hist.redo, 'M9 6l7 6-7 6']].map(([k, label, on, fn, d]) => html`
         <button key=${k} onClick=${on ? fn : null} disabled=${!on} aria-label=${label} style=${`pointer-events: auto; flex: 0 0 auto; width: 44px; height: 44px; border-radius: 22px; border: 1.5px solid rgba(203,213,225,${on ? 0.45 : 0.2}); background: rgba(27,37,58,0.94); color: ${on ? '#E2E8F0' : '#475569'}; display: flex; align-items: center; justify-content: center; cursor: ${on ? 'pointer' : 'default'}; transition: color 0.2s ease, border-color 0.2s ease`}>
