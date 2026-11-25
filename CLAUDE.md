@@ -112,7 +112,7 @@ Leangame is hosted the same way as James's other project, Interlinea (`roboticmi
 
 ## Working conventions
 
-- Don't commit to main; work on a branch. It's a prototype: commit and push to the branch as each piece of work is finished (James, 2026-11-25). PRs only when he asks.
+- It's a prototype (James, 2026-11-25): commit as each piece of work is finished, push the branch, and merge it into `main` and push `main` too, which deploys the site. No PRs unless he asks. This applies to Leangame only: Interlinea-proto is the live reader's repo, so changes there stay on a branch until James says otherwise.
 - Push with `git -c push.negotiate=true push -u origin BRANCH`.
 - Open PRs through REST, not GraphQL: `gh api repos/OWNER/REPO/pulls -f title=… -f head=… -f base=main -F body=@file`.
 - From the Claude session proxy, the GitHub Actions API (variables, dispatch) and ref deletes were blocked. Design around that: James can run workflows and click buttons.
