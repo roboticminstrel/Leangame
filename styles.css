@@ -15,3 +15,7 @@ button { font-family: inherit; }
   from { translate: var(--dx) var(--dy); opacity: 0.7; }
   to { translate: 0 0; opacity: 1; }
 }
+@keyframes readGlow {
+  0%, 100% { color: inherit; text-shadow: 0 0 0 rgba(253, 230, 138, 0); }
+  50% { color: #FDE68A; text-shadow: 0 0 8px rgba(253, 230, 138, 0.75); }
+}

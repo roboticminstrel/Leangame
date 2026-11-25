@@ -503,6 +503,7 @@ export class Range extends Component {
         this._lp = setTimeout(() => this.longPress(id), 550);
       }
     }
+    d.snap = this.readoutOf(this.state.tops); // the readout keeps showing this until the move is done
     this.drag = d;
   }
   prepMove(d) {
@@ -902,17 +903,32 @@ export class Range extends Component {
   // The expression as plain text, written straight from the tree: terms in reading order (left to right, then top
   // to bottom), joined by +; sums in brackets; scalars multiplied with ·; a vector written right after its scalars.
   // top: the expression zone's terms, which are a sum without brackets.
-  exprText(nodes, top) {
+  exprText(nodes, top) { return this.exprTokens(nodes, top).map(k => k.t).join(''); }
+  // The same, as tokens {t, id}: each piece of text knows the node it came from (brackets, + and · belong to their
+  // sum or product), so the readout can light up the part of the expression being moved.
+  exprTokens(nodes, top) {
     const pos = n => this.P.get(n.id) || { x: 0, y: 0 };
     const order = ns => ns.slice().sort((a, b) => Math.abs(pos(a).y - pos(b).y) > 60 ? pos(a).y - pos(b).y : pos(a).x - pos(b).x);
+    const join = (lists, sep, id) => lists.reduce((out, l, i) => out.concat(i ? [{ t: sep, id: id }] : [], l), []);
     const one = n => {
-      if (n.t === 's' || n.t === 'v') return this.elText(n);
-      if (n.t === 'sum') return '(' + order(n.terms.map(t => t.node)).map(one).join(' + ') + ')';
-      const fs = n.factors.map(one).join('·');
-      return n.vec ? fs + one(n.vec) : fs;
+      if (n.t === 's' || n.t === 'v') return [{ t: this.elText(n), id: n.id }];
+      if (n.t === 'sum') return [{ t: '(', id: n.id }].concat(join(order(n.terms.map(t => t.node)).map(one), ' + ', n.id), [{ t: ')', id: n.id }]);
+      const fs = join(n.factors.map(one), '·', n.id);
+      return n.vec ? fs.concat(one(n.vec)) : fs;
     };
-    const parts = order(nodes).map(one);
-    return top ? parts.join(' + ') : '(' + parts.join(' + ') + ')';
+    const parts = join(order(nodes).map(one), ' + ', null);
+    return top ? parts : [{ t: '(', id: null }].concat(parts, [{ t: ')', id: null }]);
+  }
+  // The readout of the expression as it stands: its tokens, whether its terms can be added, and its value
+  readoutOf(tops) {
+    const zoneTops = tops.filter(t => this.zoneIds.indexOf(t.node.id) >= 0);
+    if (!zoneTops.length) return null;
+    const types = zoneTops.map(t => this.typeOf(t.node));
+    let ok = types.every(t => t.k === 's' || t.k === 'v');
+    ok = ok && types.every(t => t.k === types[0].k && (t.k === 's' ? t.f === types[0].f : t.sp === types[0].sp));
+    let val = null;
+    if (ok) { for (const t of zoneTops) { const e = this.evalN(t.node); if (!e) { val = null; break; } val = val ? this.addE(val, e) : e; if (!val) break; } }
+    return { tokens: this.exprTokens(zoneTops.map(t => t.node), true), ok: !!(ok && val), val: ok ? val : null };
   }
   // a short text form of a term, for messages: −1·𝑣, (2 + 3)·𝑣
   label(n) {
@@ -1054,19 +1070,21 @@ export class Range extends Component {
     const zb = { l: 10, r: 550 };
     this.zoneIds.forEach(id => { const p = this.P.get(id); if (p) { zb.l = Math.min(zb.l, p.x - 24); zb.r = Math.max(zb.r, p.x + p.w + 24); } });
     const results = [];
-    const zoneTops = St.tops.filter(t => this.zoneIds.indexOf(t.node.id) >= 0 && !this._dset.has(t.node.id));
-    if (zoneTops.length) {
-      const types = zoneTops.map(t => this.typeOf(t.node));
-      let ok = types.every(t => t.k === 's' || t.k === 'v');
-      ok = ok && types.every(t => t.k === types[0].k && (t.k === 's' ? t.f === types[0].f : t.sp === types[0].sp));
-      let val = null;
-      if (ok) { for (const t of zoneTops) { const e = this.evalN(t.node); if (!e) { val = null; break; } val = val ? this.addE(val, e) : e; if (!val) break; } }
+    // While a tile is being dragged, the readout stays as it was when the drag began, with the moving part (and
+    // what it would act on) glowing; it changes once the move is done.
+    const dragging = this.drag && this.drag.moved && this.drag.snap;
+    const ro = dragging ? this.drag.snap : this.readoutOf(St.tops);
+    if (ro) {
+      const hot = new Set(St.dragIds || []);
+      if (this._glow) this._glow.forEach(id => hot.add(id));
+      if (St.preview && St.preview.gid && this.drag) { const g = this.locate(this.drag.orig, St.preview.gid); if (g) this.ids(g.node).forEach(id => hot.add(id)); }
+      const segs = [];
+      ro.tokens.forEach(k => { const h = k.id != null && hot.has(k.id); const last = segs[segs.length - 1]; if (last && last.hot === h) last.t += k.t; else segs.push({ t: k.t, hot: h }); });
       const red = { bg: 'rgba(248,113,113,0.16)', border: '#F87171', fg: '#FEE2E2' };
       const green = { bg: 'rgba(52,211,153,0.16)', border: '#34D399', fg: '#D1FAE5' };
-      this.zoneValue = ok && val ? '= ' + this.fmtVal(val) : null; // the old readout, still used by the tests
-      const text = this.exprText(zoneTops.map(t => t.node), true);
-      if (ok && val) results.push(Object.assign({ x: 24, y: 470, main: text, note: '' }, green));
-      else results.push(Object.assign({ x: 24, y: 470, main: text, note: 'terms in the expression need the same type' }, red));
+      this.zoneValue = ro.ok ? '= ' + this.fmtVal(ro.val) : null; // the old readout, still used by the tests
+      const main = segs.map(x => x.t).join('');
+      results.push(Object.assign({ x: 24, y: 470, main: main, segs: segs, note: ro.ok ? '' : 'terms in the expression need the same type' }, ro.ok ? green : red));
     }
     const ghosts = [];
     const HEXC = 'polygon(22px 0, calc(100% - 22px) 0, 100% 50%, calc(100% - 22px) 100%, 22px 100%, 0 50%)';
@@ -1223,7 +1241,7 @@ export class Range extends Component {
 
     ${v.results.map((r) => html`
       <div style=${`position: absolute; left: ${r.x}px; top: ${r.y}px; max-width: 520px; padding: 8px 16px; border-radius: 14px; background: ${r.bg}; border: 1.5px solid ${r.border}; color: ${r.fg}; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; pointer-events: none; z-index: 950`}>
-        <span style="font-size: 24px; font-weight: 600">${r.main}</span>
+        <span style="font-size: 24px; font-weight: 600">${r.segs.map(x => x.hot ? html`<span style="animation: readGlow 1.6s ease-in-out infinite">${x.t}</span>` : x.t)}</span>
         <span style="font-family: Inter, system-ui, sans-serif; font-size: 15px; font-weight: 500">${r.note}</span>
       </div>
     `)}

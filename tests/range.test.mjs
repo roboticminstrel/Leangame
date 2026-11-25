@@ -392,3 +392,18 @@ test('a 0 added after a wide term stays in its row, past the edge if need be (th
   assert.ok(zp.x > tp.x + tp.w, 'right after it');
   assert.ok(c.zoneIds.includes(z.id), 'still in the expression');
 });
+
+test('readout during a drag: the whole expression stays, the moving part glows; after the move it updates', () => {
+  const c = makeLive();
+  const va = c.state.tops[1].node.vec, vb = c.state.tops[0].node.vec;
+  c.renderVals(); const p = c.P.get(va.id), q = c.P.get(vb.id);
+  c.begin(va.id, 'self', ev(0, 0));
+  c.move(ev((q.x - p.x) / 2, (q.y - p.y) / 2)); c.renderVals();
+  c.move(ev(q.x - p.x, q.y - p.y));
+  const r = c.renderVals().results[0];
+  assert.equal(r.main, '(2 + 3)𝑣 + −1𝑣', 'nothing dropped out of the readout');
+  assert.deepEqual(r.segs.filter(x => x.hot).map(x => x.t.trim()).join('|'), '𝑣|−1𝑣', 'the dragged −1𝑣 and the 𝑣 it would join glow');
+  c.end();
+  assert.deepEqual(readout(c), ['(2 + 3 + −1)𝑣']);
+  assert.ok(c.renderVals().results[0].segs.every(x => !x.hot), 'nothing glows once it is done');
+});
