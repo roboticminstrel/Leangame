@@ -693,8 +693,11 @@ test('the live proof: the board is sent as Lean trees, one finished move at a ti
   const z = c.state.tops.find(t => t.node.key === 'zero').node;
   dragTree(c, '−𝑣', ...centre(c, z.id));
   c.noteBoard();
-  assert.deepEqual(calls[2][2], { add: [{ smul: [{ n: 0 }, { v: 'v' }] }, { neg: { v: 'v' } }, { v: 'v' }] });
+  // a split goes to Lean in two steps: the law makes the bracketed pair, then the bracket opens
+  assert.deepEqual(calls[2][2], { add: [{ smul: [{ n: 0 }, { v: 'v' }] }, { add: [{ neg: { v: 'v' } }, { v: 'v' }] }] });
   assert.deepEqual(calls[2][3], ['add_neg_cancel']);
+  assert.deepEqual(calls[3][2], { add: [{ smul: [{ n: 0 }, { v: 'v' }] }, { neg: { v: 'v' } }, { v: 'v' }] });
+  assert.equal(calls[3][3], null);
 });
 
 test('the Lean tab shows the live proof: steps, goal, and No goals at the end', () => {
@@ -803,4 +806,27 @@ test('1 splits into x·x⁻¹ from the tree; refused for 0', () => {
   c.state.trayItems = [{ id: 'T1', node: S0(c, '2', '2') }, { id: 'T2', node: S0(c, '0', '0') }];
   dragItem(c, '2', ...centre(c, one.id));
   assert.deepEqual(readout(c), ['0·2·(2)⁻¹𝑣']);
+});
+
+test('level 1 can be won: 0𝑣 = 0𝑣 + 0 = 0𝑣 + 0𝑣 + −(0𝑣) = (0 + 0)𝑣 + −(0𝑣) = 0𝑣 + −(0𝑣) = 0', () => {
+  const c = makeLevel();
+  const T = c.state.tops[0].node;
+  dragPiece(c, 'PZ', ...centre(c, T.vec.id));                         // 0𝑣 + 0
+  assert.deepEqual(readout(c), ['0𝑣 + 0']);
+  tap(c, T.vec.id);                                                   // the tree of 0𝑣
+  const z = c.state.tops.find(t => t.node.key === 'zero').node;
+  dragTree(c, '·', ...centre(c, z.id));                               // 0 = 0𝑣 + −(0𝑣)
+  assert.deepEqual(readout(c), ['0𝑣 + 0𝑣 − (0𝑣)']);
+  const prods = () => c.state.tops.filter(t => t.node.t === 'prod' && !c.flagged(t.node)).map(t => t.node);
+  const [a, b] = prods();
+  dragTo(c, b.vec.id, ...centre(c, a.vec.id));                        // factor 𝑣 out of the two plain terms only
+  assert.deepEqual(readout(c), ['(0 + 0)𝑣 − (0𝑣)']);
+  const G = c.state.tops.find(t => t.node.t === 'prod' && !c.flagged(t.node)).node.factors[0];
+  dragTo(c, G.terms[1].node.id, ...centre(c, G.terms[0].node.id));    // 0 + 0 → 0
+  assert.deepEqual(readout(c), ['0𝑣 − (0𝑣)']);
+  const plain = c.state.tops.find(t => t.node.t === 'prod' && !c.flagged(t.node)).node;
+  const neg = c.state.tops.find(t => c.flagged(t.node)).node;
+  dragTo(c, neg.vec.id, ...centre(c, plain.vec.id));                  // x + −x = 0
+  assert.deepEqual(readout(c), ['0']);
+  assert.equal(c.renderVals().won, true);
 });

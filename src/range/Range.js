@@ -86,7 +86,7 @@ export class Range extends Component {
     if (n.t === 'prod') {
       const o = this._orderOverride;
       const facs = o && o.key === n.id ? this.readingOrder(n.factors, n.id) : n.factors;
-      const fs = facs.map(f => this.leanTree(f)); if (fs.some(x => !x)) return null;
+      const fs = this.groupTrees(facs, n.id, 'mul'); if (fs.some(x => !x)) return null;
       const sc = fs.length === 1 ? fs[0] : fs.length ? { mul: fs } : null;
       if (!n.vec) core = sc;
       else { const v = this.leanTree(n.vec); if (!v) return null; core = sc ? { smul: [sc, v] } : v; }
@@ -96,8 +96,22 @@ export class Range extends Component {
     if (n.neg) core = { neg: core };
     return core;
   }
+  // For Lean, a pair that a law acts on must be one sub-expression: _leanGroup brackets the given members together,
+  // each part on its own (x, −x), or a run as one bracket ((a + b), −(a + b)).
+  groupTrees(ordered, key, op) {
+    const trees = ordered.map(x => ({ id: x.id, t: this.leanTree(x) }));
+    const g = this._leanGroup;
+    if (!g || g.key !== key) return trees.map(x => x.t);
+    const inG = new Set([].concat(...g.parts)); const out = []; let placed = false;
+    trees.forEach(x => {
+      if (!inG.has(x.id)) { out.push(x.t); return; }
+      if (placed) return; placed = true;
+      out.push({ [op]: g.parts.map(ids => { const ts = ids.map(id => (trees.find(y => y.id === id) || {}).t); return ts.length === 1 ? ts[0] : { [op]: ts }; }) });
+    });
+    return out;
+  }
   leanSum(nodes, key) {
-    const ts = this.readingOrder(nodes, key).map(x => this.leanTree(x));
+    const ts = this.groupTrees(this.readingOrder(nodes, key), key, 'add');
     if (!ts.length || ts.some(x => !x)) return null;
     return ts.length === 1 ? ts[0] : { add: ts };
   }
@@ -117,7 +131,12 @@ export class Range extends Component {
     const from = this._leanTree; this._leanKey = key; this._leanTree = t;
     // a cancellation goes to Lean in two steps: first the terms rearranged so the pair sits together, then the law
     const mid = this._leanMid; this._leanMid = null;
-    if (mid && JSON.stringify(mid) !== JSON.stringify(from)) { L.boardChanged(from, mid, null); L.boardChanged(mid, t, this._hint || null); }
+    const sg = this._splitGroup; this._splitGroup = null;
+    if (sg) {
+      // a split: the law makes the pair as one bracket, then the bracket opens into the sum or product
+      this._leanGroup = sg; const m2 = this.zoneTree(); this._leanGroup = null;
+      L.boardChanged(from, m2, this._hint || null); L.boardChanged(m2, t, null);
+    } else if (mid && JSON.stringify(mid) !== JSON.stringify(from)) { L.boardChanged(from, mid, null); L.boardChanged(mid, t, this._hint || null); }
     else L.boardChanged(from, t, this._hint || null);
     this._hint = null;
   }
@@ -698,8 +717,9 @@ export class Range extends Component {
     if (n.t === 'prod') return 'p(' + n.factors.map(f => this.sig(f)).join('*') + '|' + (n.vec ? this.sig(n.vec) : '') + ')';
     return 'g(' + n.terms.map(t => this.sig(t.node)).sort().join('+') + ')';
   }
-  factorsOf(n) { return n.t === 'prod' ? n.factors : (this.typeOf(n).k === 's' ? [n] : []); }
-  vecOf(n) { return n.t === 'prod' ? n.vec : (this.typeOf(n).k === 'v' ? n : null); }
+  // a negated or inverted group is sealed: factoring sees it as one whole term, never reaching inside
+  factorsOf(n) { if (this.flagged(n)) return this.typeOf(n).k === 's' ? [n] : []; return n.t === 'prod' ? n.factors : (this.typeOf(n).k === 's' ? [n] : []); }
+  vecOf(n) { if (this.flagged(n)) return this.typeOf(n).k === 'v' ? n : null; return n.t === 'prod' ? n.vec : (this.typeOf(n).k === 'v' ? n : null); }
   cloneFresh(n) { const c = this.clone(n); this.walk(c, m => { m.id = this.nid(m.id.replace(/\d+$/, '')); }, null, null); return c; }
   matchSub(U, sub, fixedIds) {
     if (fixedIds) return fixedIds.slice();
@@ -1087,7 +1107,8 @@ export class Range extends Component {
     const ty = this.typeOf(A.node); const name = this.label(A.node);
     // for Lean: the same terms with A moved right after its twin (then the law applies to neighbours)
     const order = L.chainIds.filter(id => id !== L.aId); order.splice(order.indexOf(ids[ids.length - 1]) + 1, 0, L.aId);
-    this._orderOverride = { key: L.key, ids: order }; this._leanMid = this.zoneTree(); this._orderOverride = null;
+    this._orderOverride = { key: L.key, ids: order }; this._leanGroup = { key: L.key, parts: [ids, [L.aId]] };
+    this._leanMid = this.zoneTree(); this._orderOverride = null; this._leanGroup = null;
     const res = L.kind === 'add' ? (ty.k === 'v' ? this.mkV(ty.sp, '0', 'zero', ty.f || null, this.K.ZW) : this.mkS(ty.f, '0', '0')) : this.mkS(ty.f, '1', '1');
     this.setRef(tops, this.locate(tops, ids[0]), res);
     ids.slice(1).concat([L.aId]).forEach(id => { const l = this.locate(tops, id); if (l) this.setRef(tops, l, null); });
@@ -1136,7 +1157,8 @@ export class Range extends Component {
     const loc = this.locate(tops, oneId); if (!loc) return null;
     const a = this.cloneFresh(item); const b = this.inverseMul(item); if (!b) return null;
     const e = this.evalN(a); if (!e || e.k !== 's' || Math.hypot(e.c[0], e.c[1]) < 1e-12) return { bad: '0 has no multiplicative inverse' };
-    if (loc.kind === 'factor') loc.parent.factors.splice(loc.idx, 1, a, b); else this.setRef(tops, loc, this.mkProd([a, b], null));
+    if (loc.kind === 'factor') { loc.parent.factors.splice(loc.idx, 1, a, b); return { a: a, b: b, key: loc.parent.id, op: 'mul' }; }
+    this.setRef(tops, loc, this.mkProd([a, b], null));
     return { a: a, b: b };
   }
   // The term of the 0's own sum under the pointer, if any (the whole term glows)
@@ -1290,14 +1312,15 @@ export class Range extends Component {
       list.forEach(u => { if (u !== t && inSame(u) && u.x >= t.x + mz.w - 1) u.x += grow; });
       list.splice(list.indexOf(t), 1, { node: a, x: t.x, y: t.y + mz.h / 2 - ma.h / 2 }, { node: b, x: t.x + ma.w + K.GAP, y: t.y + mz.h / 2 - mb.h / 2 });
     };
-    if (loc.kind === 'term') two(loc.parent.terms, loc.parent.terms[loc.idx], () => true);
-    else if (loc.kind === 'top' && this.zoneIds.indexOf(Z.id) >= 0) two(tops, tops[loc.ti], u => this.zoneIds.indexOf(u.node.id) >= 0);
+    let key = null;
+    if (loc.kind === 'term') { key = loc.parent.id; two(loc.parent.terms, loc.parent.terms[loc.idx], () => true); }
+    else if (loc.kind === 'top' && this.zoneIds.indexOf(Z.id) >= 0) { key = 'zone'; two(tops, tops[loc.ti], u => this.zoneIds.indexOf(u.node.id) >= 0); }
     else {
       const S = this.mkSum([{ node: a, x: 0, y: 0 }, { node: b, x: 0, y: 0 }]); this.rowArrange(S);
       if (loc.kind === 'top') tops[loc.ti].x -= this.sumPadL(S) + 26 + K.SPAD;
       this.setRef(tops, loc, S);
     }
-    return { a: a, b: b };
+    return { a: a, b: b, key: key, op: 'add' };
   }
   imove(e) {
     const d = this.idrag; const w = this.worldDelta(e, d);
@@ -1319,6 +1342,7 @@ export class Range extends Component {
     if (r.bad) { this.flash(at, r.bad, 'bad'); return; }
     const slides = {}; slides[r.a.id] = { x: d.x, y: d.y, top: true }; slides[r.b.id] = { x: d.x, y: d.y };
     this._hint = hit.one ? ['arith'] : ['add_neg_cancel'];
+    if (r.key) this._splitGroup = { key: r.key, parts: [[r.a.id], [r.b.id]] };
     this.setState({ tops: this.normTops(tops), slides: slides });
     clearTimeout(this._ss);
     this._ss = setTimeout(() => this.setState({ slides: {} }), 650);

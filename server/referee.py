@@ -359,6 +359,22 @@ def selftest():
     code, st4 = ss.start({"start": {"smul": [{"mul": [n(2), {"inv": n(2)}]}, w]}, "goal": {"smul": [n(1), w]}})
     r5 = ss.step({"sid": st4.get("sid"), "from": {"smul": [{"mul": [n(2), {"inv": n(2)}]}, w]}, "to": {"smul": [n(1), w]}, "hint": ["arith"]})[1]
     checks.append(("live: 2·2⁻¹ becomes 1 (norm_num, characteristic 0)", r5.get("ok") and r5.get("done") and r5.get("verified")))
+    # level 1, played the way the board sends it: 0v = 0v + 0 = 0v + (0v + −(0v)) = 0v + 0v + −(0v)
+    # = (0 + 0)v + −(0v) = 0v + −(0v) = 0
+    zv = {"smul": [n(0), w]}; nz = {"neg": zv}
+    seq = [({"add": [zv, {"zero": True}]}, ["add_zero"]), ({"add": [zv, {"add": [zv, nz]}]}, ["add_neg_cancel"]),
+           ({"add": [zv, zv, nz]}, None), ({"add": [{"smul": [{"add": [n(0), n(0)]}, w]}, nz]}, ["add_smul"]),
+           ({"add": [zv, nz]}, ["add_zero"]), ({"zero": True}, ["add_neg_cancel"])]
+    code, stl = ss.start({"start": zv, "goal": {"zero": True}})
+    cur, rl = zv, {}
+    for nxt, hint in seq:
+        rl = ss.step({"sid": stl.get("sid"), "from": cur, "to": nxt, "hint": hint})[1]
+        if not rl.get("ok"):
+            break
+        cur = nxt
+    checks.append(("live: level 1 (0v = 0) played through to No goals, whole proof compiles", rl.get("ok") and rl.get("done") and rl.get("verified")))
+    if not rl.get("done"):
+        print("     level 1 stopped at", json.dumps(cur), "->", json.dumps(rl)[:600], flush=True)
     code, st2 = ss.start({"start": {"add": [u, w]}, "goal": {"add": [w, u]}})
     r3 = ss.step({"sid": st2.get("sid"), "from": {"add": [u, w]}, "to": {"add": [w, u]}})[1]
     checks.append(("live: rearranging a sum is a step (ac_rfl)", r3.get("ok") and r3.get("done") and r3.get("verified")))
