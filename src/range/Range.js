@@ -457,6 +457,12 @@ export class Range extends Component {
     const loc = this.locate(tops, id); if (!loc) return;
     const abs = this.P.get(id) || { x: 0, y: 0, w: 96, h: 88 };
     const d = { id: id, role: role, sx: e.clientX, sy: e.clientY, moved: false, tops: tops, orig: this.clone(this.state.tops), rules: this.state.rules, gx: abs.x, gy: abs.y, gw: abs.w, gh: abs.h };
+    // a 0 tile on its own (the tray's 0 in ℝ, or a vector 0 left over): over a matching term or bracket it adds + 0
+    const zn = loc.node;
+    if (loc.kind === 'top' && role === 'self' && ((zn.t === 's' && zn.val === '0') || (zn.t === 'v' && zn.key === 'zero'))) {
+      const zt = this.typeOf(zn);
+      d.zero = { kind: zt.k, f: zt.f, sp: zt.sp };
+    }
     if (d.rules) {
       if (loc.kind === 'factor') { d.mode = loc.parent.vec ? 'reorder' : 'pending'; d.prodId = loc.parent.id; d.ax = abs.x; d.ay = abs.y; d.w = abs.w; }
       else { d.mode = 'move'; d.blockId = loc.kind === 'vec' ? loc.parent.id : id; this.prepMove(d); }
@@ -501,7 +507,8 @@ export class Range extends Component {
       if (d.mode === 'sand') this.detach(d);
       this.setState({ dragIds: this.dragSet(d), holding: null });
     }
-    const pv = d.rules ? this.findPreview(d, d.gx + dx + d.gw / 2, d.gy + dy + d.gh / 2) : null;
+    d.zeroHover = d.zero ? this.zeroTarget(d.gx + dx + d.gw / 2, d.gy + dy + d.gh / 2, d.zero.kind, Object.assign({ exclude: d.id }, d.zero)) : null;
+    const pv = d.rules && !d.zeroHover ? this.findPreview(d, d.gx + dx + d.gw / 2, d.gy + dy + d.gh / 2) : null;
     d.preview = pv;
     if (d.mode === 'reorder' && pv) {
       this.setState({ override: { id: d.id, x: d.gx + dx, y: d.gy + dy }, preview: pv });
@@ -521,13 +528,15 @@ export class Range extends Component {
     const key = d.mode === 'sand' ? d.topKey : d.blockId;
     const bl = this.locate(d.tops, key); const slot = this.slotXY(d.tops, bl);
     if (slot) { slot.x = d.ox + dx; slot.y = d.oy + dy; }
-    this.setState({ tops: this.clone(d.tops), preview: pv });
+    this.setState({ tops: this.clone(d.tops), preview: pv, zeroHover: d.zeroHover });
   }
   end() {
     clearTimeout(this._lp);
     const d = this.drag; this.drag = null;
     if (!d) return;
     if (!d.moved) { this.setState({ holding: null, dragIds: null }); return; }
+    if (this.state.zeroHover) this.setState({ zeroHover: null });
+    if (d.zeroHover && this.dropZero(d)) return;
     if (d.rules && d.preview) { this.applyPreview(d); return; }
     if (d.mode === 'reorder') { this.setState({ override: null, dragIds: null, preview: null }); return; }
     if (d.mode === 'move') { this.setState({ dragIds: null, preview: null }); return; }
@@ -823,11 +832,13 @@ export class Range extends Component {
   }
   // What a dragged 0 is over: a tile of its kind ('v' vectors, 's' scalars), or the right bracket of a sum of that
   // kind (the deepest one, tiles first)
-  zeroTarget(cx, cy, kind) {
+  // opts (a 0 tile being dragged): exclude its own id; f / sp: its field and space, which the target must match
+  zeroTarget(cx, cy, kind, opts) {
+    opts = opts || {};
     let best = null;
     const take = (n, depth, prio) => { if (!best || depth > best.depth || (depth === best.depth && prio > best.prio)) best = { id: n.id, depth: depth, prio: prio }; };
     this.state.tops.forEach(t => this.walk(t.node, n => {
-      const p = this.P.get(n.id); if (!p) return;
+      const p = this.P.get(n.id); if (!p || n.id === opts.exclude) return;
       if (n.t === (kind === 'v' ? 'v' : 's') && this.inRect(p, cx, cy, 6)) take(n, p.depth, 1);
       else if (n.t === 'sum' && this.typeOf(n).k === kind) {
         const rb = { x: p.x + p.w - 34 - 10, y: p.y, w: 44, h: p.h };
@@ -840,7 +851,24 @@ export class Range extends Component {
     const loc = this.locate(this.state.tops, best.id);
     const n = loc.kind === 'vec' || (loc.kind === 'factor' && !loc.parent.vec) ? loc.parent : loc.node;
     const ty = this.typeOf(n);
+    if (opts.f && ty.f && ty.f !== opts.f) return null;
+    if (opts.sp && ty.sp !== opts.sp) return null;
     return { id: n.id, sp: ty.sp, f: ty.f, kind: n.t, glow: this.ids(n) };
+  }
+  // a 0 tile released over a target: it leaves its spot and joins the target's sum
+  dropZero(d) {
+    const tops = this.clone(d.tops);
+    const ti = tops.findIndex(t => t.node.id === d.id); if (ti < 0) return false;
+    const from = tops[ti]; tops.splice(ti, 1);
+    const tgt = this.locate(tops, d.zeroHover.id); if (!tgt) return false;
+    const at = this.P.get(d.zeroHover.id);
+    const z = this.addZero(tops, d.zeroHover.id, from.node); if (!z) return false;
+    this.setState({ tops: this.normTops(tops), dragIds: null, preview: null, override: null, slide: { id: z.id, x: from.x, y: from.y } });
+    clearTimeout(this._st);
+    this._st = setTimeout(() => this.setState({ slide: null }), 450);
+    const name = this.label(tgt.node);
+    this.flash(at, name + ' = ' + name + ' + 0 · additive identity', 'ok');
+    return true;
   }
   // a short text form of a term, for messages: −1·𝑣, (2 + 3)·𝑣
   label(n) {
@@ -851,12 +879,12 @@ export class Range extends Component {
   // v  ->  v + 0 (Axler 1.20, additive identity, read right to left), and a  ->  a + 0 for scalars (the field's). The 0 lands just right of its target, in the
   // same sum: after a term, at the right end of a bracket, or in a new bracket (v + 0) for a vector on its own or
   // docked after scalars. Returns the new 0, or null.
-  addZero(tops, id) {
+  addZero(tops, id, given) {
     const loc = this.locate(tops, id); if (!loc) return null;
     const X = loc.node; const ty = this.typeOf(X);
     if (ty.k !== 'v' && ty.k !== 's') return null;
     const K = this.K;
-    const z = ty.k === 'v' ? this.mkV(ty.sp, '0', 'zero', ty.f || null, K.ZW) : this.mkS(ty.f, '0', '0');
+    const z = given || (ty.k === 'v' ? this.mkV(ty.sp, '0', 'zero', ty.f || null, K.ZW) : this.mkS(ty.f, '0', '0'));
     const zw = this.measure(z).w;
     if (X.t === 'sum') {
       let x1 = -K.GAP, y0 = -44, y1 = 44;

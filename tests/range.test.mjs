@@ -289,3 +289,43 @@ test('scalar zero: on a scalar inside the bracket it goes right after it; vector
   assert.equal(dragPiece(c, 'PZ', ...centre(c, three.id)), null);
   assert.equal(show(c.state.tops[0].node), '(2 + 0 + 3)·𝑣', 'nothing else changed');
 });
+
+test('the 0 tile in ℝ adds like the tray zeros: over the (2 + 3) bracket it joins, in both modes', () => {
+  for (const rules of [false, true]) {
+    const c = make();
+    c.setState({ rules });
+    const zero = c.state.tops.find(t => t.node.el === '0').node;
+    const G = c.state.tops[0].node.factors[0];
+    c.renderVals(); const p = c.P.get(zero.id); const [tx, ty] = rightBracket(c, G.id);
+    c.begin(zero.id, 'self', ev(0, 0));
+    c.move(ev((tx - p.x - 48) / 2, (ty - p.y - 44) / 2)); c.renderVals();
+    c.move(ev(tx - p.x - 48, ty - p.y - 44)); c.renderVals();
+    assert.equal(c.state.zeroHover && c.state.zeroHover.id, G.id, 'the bracket is highlighted');
+    c.end(); c.renderVals();
+    assert.equal(show(c.state.tops[0].node), '(2 + 3 + 0)·𝑣', rules ? 'rules' : 'sandbox');
+    assert.ok(!c.state.tops.some(t => t.node.id === zero.id), 'the tile itself moved in');
+    assert.deepEqual(result(c), ['= 4𝑣']);
+  }
+});
+
+test('the 0 tile in ℝ: centred on a scalar it adds; beside it, it still docks; a ℂ term refuses it', () => {
+  const c = make();
+  const zero = () => c.state.tops.find(t => t.node.el === '0' && t.node.t === 's').node;
+  const two = c.state.tops[0].node.factors[0].terms[0].node;
+  dragTo(c, zero().id, ...centre(c, two.id));
+  assert.equal(show(c.state.tops[0].node), '(2 + 0 + 3)·𝑣');
+  const c2 = make();
+  const z2 = c2.state.tops.find(t => t.node.el === '0').node;
+  const w = byEl(c2, '𝑤');
+  c2.renderVals(); const pw = c2.P.get(w.id);
+  dragTo(c2, z2.id, pw.x + 54 - 96 + 48, pw.y + 44);  // onto 𝑤's field edge: a scalar target isn't there, so it docks
+  assert.ok(c2.state.tops.some(t => show(t.node) === '0·𝑤'), 'docked: 0·𝑤');
+  const c3 = make();
+  const z3 = c3.state.tops.find(t => t.node.el === '0').node;
+  const i = c3.state.tops.find(t => t.node.el === '𝑖').node;
+  c3.renderVals();
+  c3.begin(z3.id, 'self', ev(0, 0)); const p3 = c3.P.get(z3.id), pi = c3.P.get(i.id);
+  c3.move(ev(pi.x - p3.x, pi.y - p3.y));
+  assert.equal(c3.state.zeroHover, null, 'a real 0 is not offered to a complex scalar');
+  c3.end();
+});
