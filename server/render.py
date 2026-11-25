@@ -216,7 +216,7 @@ def step(frm, to, hint=None):
     move's rule (hint) or any rule, and leaves `next = goal`, closed at once when next is the goal itself."""
     _check(frm, to)
     hints = [h for h in (hint or []) if h in RULES or h == ARITH]
-    rules = hints + [r for r in RULES if r not in hints]
+    rules = hints + [r for r in RULES if r not in hints] + ([] if ARITH in hints else [ARITH])  # arithmetic last
     alts = " | ".join(alternatives(rules))
     return f"refine Eq.trans (show {term(frm)} = {term(to)} by first | {alts}) ?_ <;> try with_reducible rfl"
 

@@ -556,7 +556,7 @@ test('level 1: goal 0 in 𝑉, start 0·𝑣, with ASSUMPTIONS and GOAL above th
   const c = makeLevel();
   const v = c.renderVals();
   assert.deepEqual(readout(c), ['0𝑣']);
-  assert.deepEqual(v.heads.map(h => h.title), ['ASSUMPTIONS', 'GOAL']);
+  assert.deepEqual(v.heads.map(h => h.title), ['ASSUMPTIONS', 'GOAL · 1.30']);
   assert.equal(v.heads[0].tokens.map(k => k.t).join(''), '{𝑉 : Type}   [VectorSpace ℝ 𝑉]   (𝑣 : 𝑉)');
   assert.deepEqual(v.heads[0].tokens.filter(k => k.tile).map(k => k.t + ':' + k.tile.kind), ['𝑉:para', 'ℝ:para', '𝑉:para', '(𝑣 : 𝑉):decl']);
   assert.equal(v.heads[1].tokens.map(k => k.t).join(''), '0');
@@ -840,7 +840,8 @@ test('level 1 can be won: 0𝑣 = 0𝑣 + 0 = 0𝑣 + 0𝑣 + −(0𝑣) = (0 + 
 });
 
 test('the TOOLS tab fills the screen with the concept graph; its current node takes you back to the game', async () => {
-  const { nodeState, ACTIVE } = await import('../src/graph/ConceptGraph.js');
+  const { nodeState } = await import('../src/graph/ConceptGraph.js');
+  const { START_DONE } = await import('../src/levels.js');
   const { NODES } = await import('../src/graph/data.js');
   const c = makeLevel();
   c.setState({ trayOpen: true });
@@ -849,11 +850,123 @@ test('the TOOLS tab fills the screen with the concept graph; its current node ta
   assert.equal(v.tray.tools, true);
   assert.equal(v.tray.top, 0);
   assert.equal(Math.round(v.tray.h), Math.round(716 / (390 / 560)), 'the whole screen');
-  assert.equal(ACTIVE, '1.30');
-  assert.equal(nodeState('1.27'), 'done'); assert.equal(nodeState('1.20'), 'done');
-  assert.equal(nodeState('1.32'), 'ahead'); assert.equal(nodeState('1.30'), 'active');
+  const done = new Set(START_DONE);
+  assert.equal(nodeState('1.27', done, '1.30'), 'done'); assert.equal(nodeState('1.30', done, '1.30'), 'active');
+  assert.equal(nodeState('1.33', done, '1.30'), 'next', 'one step away: shown grey');
+  assert.equal(nodeState('1.32', done, '1.30'), 'hidden', 'two steps away: not shown');
+  done.add('1.30');
+  assert.equal(nodeState('1.32', done, '1.30'), 'next', 'once 1.30 is done, 1.32 is one step away');
   assert.equal(NODES.length, 20);
   assert.ok(NODES.find(n => n.id === '1.30').f.length > 0, 'it has the book text');
   v.tray.play();
   assert.equal(c.renderVals().tray.closing, true, 'the panel slides away');
+});
+
+const levelsMod = await import('../src/levels.js');
+const freshStore = extra => levelsMod.memoryStore(extra || null);
+const makeAt = (props) => makeLive(Object.assign({ store: freshStore() }, props));
+const after = c => { c.renderVals(); c.noteBoard(); c.renderVals(); };
+
+test('the proof stays hidden until a node is done', async () => {
+  const { withoutProof } = await import('../src/graph/ConceptGraph.js');
+  const { NODES } = await import('../src/graph/data.js');
+  const n = NODES.find(x => x.id === '1.30');
+  assert.ok(n.f.some(b => b[0] === 'pr'));
+  assert.ok(!withoutProof(n.f).some(b => b[0] === 'pr'));
+  assert.ok(withoutProof(n.f).length >= 1, 'the statement stays');
+});
+
+test('undo, redo and rewind walk the level\'s history; a new move overwrites what was ahead', () => {
+  const c = makeAt({});
+  after(c);
+  dragPiece(c, 'PZ', ...centre(c, c.state.tops[0].node.vec.id)); after(c);            // 0𝑣 + 0
+  dragPiece(c, 'PZS', ...centre(c, c.state.tops[0].node.factors[0].id)); after(c);    // (0 + 0)𝑣 + 0
+  assert.deepEqual(readout(c), ['(0 + 0)𝑣 + 0']);
+  let v = c.renderVals(); assert.equal(v.hist.canUndo, true); assert.equal(v.hist.canRedo, false);
+  v.hist.undo(); assert.equal(c.state.histAnim, true, 'tiles glide'); after(c);
+  assert.deepEqual(readout(c), ['0𝑣 + 0']);
+  assert.equal(c.renderVals().hist.canRedo, true);
+  c.renderVals().hist.redo(); after(c);
+  assert.deepEqual(readout(c), ['(0 + 0)𝑣 + 0']);
+  c.renderVals().hist.rewind(); after(c);
+  assert.deepEqual(readout(c), ['0𝑣']);
+  assert.equal(c.renderVals().hist.canUndo, false);
+  assert.equal(c.renderVals().hist.canRedo, true, 'redo still walks forward');
+  c.renderVals().hist.redo(); after(c);
+  assert.deepEqual(readout(c), ['0𝑣 + 0']);
+  dragPiece(c, 'PO', ...centre(c, c.state.tops[0].node.vec.id)); after(c);           // a different move
+  assert.equal(c.renderVals().hist.canRedo, false, 'what was ahead is gone');
+  // restored positions are tidy: the expression's terms in one row
+  c.renderVals().hist.undo(); after(c);
+  const ys = c.state.tops.filter(t => c.zoneIds.includes(t.node.id)).map(t => { const p = c.P.get(t.node.id); return Math.round(p.y + p.h / 2); });
+  assert.equal(new Set(ys).size, 1, 'one row');
+});
+
+test('undo sends Lean the move reversed; rewind restarts the proof', () => {
+  const calls = [];
+  const lean = { setLevel: (a, g) => calls.push(['level', a]), boardChanged: (f, t, h) => calls.push(['move', f, t, h]), subscribe: () => () => {} };
+  const c = makeAt({ lean });
+  c.renderVals(); c.initLean();
+  dragPiece(c, 'PZ', ...centre(c, c.state.tops[0].node.vec.id)); after(c);
+  const fwd = calls[calls.length - 1];
+  c.renderVals().hist.undo(); after(c);
+  const back = calls[calls.length - 1];
+  assert.deepEqual([back[1], back[2], back[3]], [fwd[2], fwd[1], fwd[3]]);
+  c.renderVals().hist.redo(); after(c);
+  c.renderVals().hist.rewind(); after(c);
+  assert.equal(calls[calls.length - 1][0], 'level');
+});
+
+test('winning marks the node done; levels keep their place when you switch away and back', () => {
+  const store = freshStore();
+  const c = makeAt({ store });
+  after(c);
+  dragPiece(c, 'PZ', ...centre(c, c.state.tops[0].node.vec.id)); after(c);
+  c.switchLevel('1.32');
+  assert.equal(c.state.level, '1.32');
+  c.renderVals(); c.noteBoard(); after(c);
+  assert.deepEqual(readout(c), ['−1𝑣']);
+  c.switchLevel('1.30'); c.renderVals(); c.noteBoard(); after(c);
+  assert.deepEqual(readout(c), ['0𝑣 + 0'], 'back where it was left');
+  assert.equal(c.renderVals().hist.canUndo, true);
+  // a new page load from the same store resumes 1.30 too
+  const c2 = makeLive({ store }); c2.renderVals();
+  assert.equal(c2.state.level, '1.30');
+  assert.deepEqual(readout(c2), ['0𝑣 + 0']);
+});
+
+test('level 1.32 can be won with 1.30 unlocked: (−1)𝑣 → … → −𝑣', () => {
+  const store = freshStore({ done: levelsMod.START_DONE.concat(['1.30']), current: '1.32', places: {} });
+  const c = makeLive({ store }); after(c);
+  assert.deepEqual(readout(c), ['−1𝑣']);
+  const T = c.state.tops[0].node;
+  dragPiece(c, 'PZ', ...centre(c, T.vec.id)); after(c);                              // −1𝑣 + 0
+  tap(c, T.vec.id);
+  const z = c.state.tops.find(t => t.node.key === 'zero').node;
+  dragTree(c, '𝑣', ...centre(c, z.id)); after(c);                                    // −1𝑣 + 𝑣 + −𝑣
+  assert.deepEqual(readout(c), ['−1𝑣 + 𝑣 + −𝑣']);
+  const lone = c.state.tops.find(t => t.node.t === 'v' && !t.node.neg).node;
+  dragPiece(c, 'PO', ...centre(c, lone.id)); after(c);                               // −1𝑣 + 1𝑣 + −𝑣
+  assert.deepEqual(readout(c), ['−1𝑣 + 1𝑣 + −𝑣']);
+  const prods = c.state.tops.filter(t => t.node.t === 'prod').map(t => t.node);
+  dragTo(c, prods[1].vec.id, ...centre(c, prods[0].vec.id)); after(c);              // (−1 + 1)𝑣 + −𝑣
+  assert.deepEqual(readout(c), ['(−1 + 1)𝑣 + −𝑣']);
+  const G = c.state.tops.find(t => t.node.t === 'prod').node.factors[0];
+  dragTo(c, G.terms[1].node.id, ...centre(c, G.terms[0].node.id)); after(c);        // 0𝑣 + −𝑣
+  assert.deepEqual(readout(c), ['0𝑣 + −𝑣']);
+  const P = c.state.tops.find(t => t.node.t === 'prod').node;
+  dragTo(c, P.factors[0].id, ...centre(c, P.vec.id)); after(c);                     // 0 + −𝑣 (1.30, unlocked)
+  assert.deepEqual(readout(c), ['0 + −𝑣']);
+  const z2 = c.state.tops.find(t => t.node.key === 'zero').node, nv = c.state.tops.find(t => t.node.neg).node;
+  dragTo(c, z2.id, ...centre(c, nv.id)); after(c);                                  // −𝑣
+  assert.deepEqual(readout(c), ['−𝑣']);
+  assert.equal(c.renderVals().won, true);
+  assert.ok(c.prog.done.includes('1.32'));
+});
+
+test('0𝑣 = 0 is not a move inside level 1.30 itself', () => {
+  const c = makeAt({}); after(c);
+  const P = c.state.tops[0].node;
+  dragTo(c, P.factors[0].id, ...centre(c, P.vec.id)); after(c);
+  assert.deepEqual(readout(c), ['0𝑣']);
 });

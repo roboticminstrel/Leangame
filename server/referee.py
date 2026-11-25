@@ -377,6 +377,23 @@ def selftest():
     checks.append(("live: level 1 (0v = 0) played through to No goals, whole proof compiles", rl.get("ok") and rl.get("done") and rl.get("verified")))
     if not rl.get("done"):
         print("     level 1 stopped at", json.dumps(cur), "->", json.dumps(rl)[:600], flush=True)
+    # level 1.32, with 1.30 unlocked: (−1)v → (−1)v + 0 → (−1)v + (v + −v) → (−1)v + v + −v → (−1)v + 1v + −v
+    # → (−1 + 1)v + −v → 0v + −v → 0 + −v → −v
+    m1 = {"smul": [n(-1), w]}; nv = {"neg": w}
+    seq2 = [({"add": [m1, {"zero": True}]}, ["add_zero"]), ({"add": [m1, {"add": [w, nv]}]}, ["add_neg_cancel"]),
+            ({"add": [m1, w, nv]}, None), ({"add": [m1, {"smul": [n(1), w]}, nv]}, ["mul_one", "one_smul"]),
+            ({"add": [{"smul": [{"add": [n(-1), n(1)]}, w]}, nv]}, ["add_smul"]),
+            ({"add": [{"smul": [n(0), w]}, nv]}, ["add_neg_cancel"]), ({"add": [{"zero": True}, nv]}, ["zero_smul"]), (nv, ["add_zero"])]
+    code, stm = ss.start({"start": m1, "goal": nv})
+    cur, rm = m1, {}
+    for nxt, hint in seq2:
+        rm = ss.step({"sid": stm.get("sid"), "from": cur, "to": nxt, "hint": hint})[1]
+        if not rm.get("ok"):
+            break
+        cur = nxt
+    checks.append(("live: level 1.32 ((−1)v = −v) played through, whole proof compiles", rm.get("ok") and rm.get("done") and rm.get("verified")))
+    if not rm.get("done"):
+        print("     level 1.32 stopped at", json.dumps(cur), "->", json.dumps(rm)[:600], flush=True)
     code, st2 = ss.start({"start": {"add": [u, w]}, "goal": {"add": [w, u]}})
     r3 = ss.step({"sid": st2.get("sid"), "from": {"add": [u, w]}, "to": {"add": [w, u]}})[1]
     checks.append(("live: rearranging a sum is a step (ac_rfl)", r3.get("ok") and r3.get("done") and r3.get("verified")))

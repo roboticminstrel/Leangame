@@ -3,6 +3,8 @@
 import { Component } from '../../vendor/preact.mjs';
 import { html } from '../html.js';
 import { ConceptGraph } from '../graph/ConceptGraph.js';
+import { LeanPlay } from '../lean/LeanPlay.js';
+import { LEVELS, progressFrom, browserStore, memoryStore } from '../levels.js';
 
 export class Range extends Component {
   constructor(props) {
@@ -12,6 +14,9 @@ export class Range extends Component {
     if (!props.legacy) Object.assign(this.K, { AY: 84, GY: 192, ZT: 300, ZB: 700 }); // ASSUMPTIONS, GOAL, EXPRESSION
     this.P = new Map();
     this.M = new Map();
+    // progress (done nodes, each level's place) lives in the browser; tests pass a memory store
+    this.store = props.store || (typeof localStorage !== 'undefined' && !props.legacy && !props.demo ? browserStore() : memoryStore());
+    this.prog = progressFrom(this.store);
     this.state = this.initialState();
     this.setBoard = el => { this.board = el; };
   }
@@ -37,13 +42,16 @@ export class Range extends Component {
       // Rules mode only; the tray holds the two zeros (0 in ℝ, 0 in 𝑉), each an endless supply, and what the player
       // taps. Level 1 (Axler 1.30): from 0·𝑣 reach the zero vector. props.demo: the earlier (2 + 3)𝑣 + −1𝑣 (tests).
       const Y = this.K.ZT + 110;
+      const level = this.props.level || this.prog.current;
+      const L = this.loadLevel(level);
       const tops = this.props.demo
         ? [{ node: this.mkProd([g], this.mkV('𝑉', '𝑣', 'v', 'R', 140)), x: 24, y: Y },
           { node: this.mkProd([this.mkS('R', '−1', '-1')], this.mkV('𝑉', '𝑣', 'v', 'R', 140)), x: 214, y: Y + 168 }]
-        : [{ node: this.mkProd([this.mkS('R', '0', '0')], this.mkV('𝑉', '𝑣', 'v', 'R', 140)), x: 24, y: Y }];
+        : L.tops;
+      this.hist = this.props.demo ? { entries: [{ tops: this.clone(tops), steps: [] }], idx: 0 } : L.hist;
       return Object.assign(base, {
         rules: true, trayOpen: false, trayTab: 'tray', trayItems: [], trayNew: {}, slides: {}, tiles: { assume: true, goal: true },
-        goal: this.mkV('𝑉', '0', 'zero', 'R', 110),
+        level: level, goal: this.props.demo ? this.mkV('𝑉', '0', 'zero', 'R', 110) : L.goal,
         tops: tops,
         pieces: [
           { id: 'PZS', kind: 'zeroS', x: 30, y: 600, hx: 30, hy: 600 },
@@ -123,32 +131,146 @@ export class Range extends Component {
     return ns.slice().sort((a, b) => Math.abs(pos(a).y - pos(b).y) > 60 ? pos(a).y - pos(b).y : pos(a).x - pos(b).x);
   }
   zoneTree() { return this.leanSum(this.state.tops.filter(t => this.zoneIds.indexOf(t.node.id) >= 0).map(t => t.node), 'zone'); }
-  // After each finished move (nothing being dragged), if the expression changed, tell the live proof
+  // ---------- levels: a level's place is its move history (each entry the board after a move, with the Lean steps
+  // that move sent) and where in it the player is ----------
+  loadLevel(id) {
+    const L = LEVELS[id] || LEVELS['1.30'];
+    const b = L.build(this);
+    const place = this.prog.places[L.id];
+    if (place && place.entries && place.entries[place.idx]) {
+      this.bumpUid(place.entries);
+      return { goal: b.goal, tops: this.clone(place.entries[place.idx].tops), hist: { entries: place.entries, idx: place.idx } };
+    }
+    const tops = b.start.map((n, i) => ({ node: n, x: 24 + i * 200, y: this.K.ZT + 110 }));
+    return { goal: b.goal, tops: tops, hist: { entries: [{ tops: this.clone(tops), steps: [] }], idx: 0 } };
+  }
+  // ids loaded from storage must not collide with new ones
+  bumpUid(x) { const m = JSON.stringify(x).match(/"id":"[a-zA-Z]+(\d+)"/g) || []; m.forEach(t => { const k = parseInt(t.replace(/\D/g, ''), 10); if (k >= this.uid) this.uid = k + 1; }); }
+  savePlace() {
+    if (this.props.legacy || this.props.demo) return;
+    const lv = this.state.level;
+    this.prog.places[lv] = { entries: this.hist.entries, idx: this.hist.idx };
+    this.prog.current = lv;
+    this.store.save(this.prog);
+  }
+  // Start (or go back to) another level: this one's place is saved, the other's restored where it was left
+  switchLevel(id) {
+    if (!LEVELS[id]) return;
+    this.savePlace();
+    const L = this.loadLevel(id);
+    this.hist = L.hist; this._histKey = null; this._resync = true;
+    this.setState({ level: id, goal: L.goal, tops: this.normTops(this.tidy(L.tops)), tree: null, trayClosing: true, histAnim: true, zeroHover: null, preview: null });
+    clearTimeout(this._tc); this._tc = setTimeout(() => this.setState({ trayOpen: false, trayClosing: false, trayTab: 'tray' }), 220);
+    clearTimeout(this._ha); this._ha = setTimeout(() => this.setState({ histAnim: false }), 450);
+    this.prog.current = id; this.store.save(this.prog);
+  }
+  // the expression as an ordered structure (what a move changes; positions only matter through reading order)
+  okey(n) {
+    let k;
+    if (n.t === 's') k = 's:' + n.val;
+    else if (n.t === 'v') k = 'v:' + n.type + ':' + (n.neg ? '-' : '') + n.el;
+    else if (n.t === 'prod') k = 'p(' + n.factors.map(f => this.okey(f)).join('*') + '|' + (n.vec ? this.okey(n.vec) : '') + ')';
+    else k = 'g(' + this.readingOrder(n.terms.map(t => t.node), n.id).map(x => this.okey(x)).join('+') + ')';
+    return (n.neg ? '-' : '') + k + (n.inv ? '^-1' : '');
+  }
+  histKey() { return this.readingOrder(this.state.tops.filter(t => this.zoneIds.indexOf(t.node.id) >= 0).map(t => t.node), 'zone').map(n => this.okey(n)).join(' + '); }
+  canUndo() { return !!this.hist && this.hist.idx > 0; }
+  canRedo() { return !!this.hist && this.hist.idx < this.hist.entries.length - 1; }
+  undo() {
+    if (!this.canUndo() || this.drag) return;
+    const e = this.hist.entries[this.hist.idx]; this.hist.idx--;
+    this.restore(this.hist.entries[this.hist.idx].tops, { steps: e.steps.slice().reverse().map(st => [st[1], st[0], st[2]]) });
+  }
+  redo() {
+    if (!this.canRedo() || this.drag) return;
+    this.hist.idx++; const e = this.hist.entries[this.hist.idx];
+    this.restore(e.tops, { steps: e.steps });
+  }
+  // all the way back to the start; redo still walks forward until a new move overwrites what's ahead
+  rewind() {
+    if (!this.canUndo() || this.drag) return;
+    this.hist.idx = 0;
+    this.restore(this.hist.entries[0].tops, { restart: true, steps: [] });
+  }
+  restore(tops, R) {
+    this._restoring = R;
+    this.setState({ tops: this.normTops(this.tidy(this.clone(tops))), histAnim: true, zeroHover: null, preview: null, slide: null, slides: {} });
+    clearTimeout(this._ha); this._ha = setTimeout(() => this.setState({ histAnim: false }), 450);
+  }
+  // aligned spots: the expression's terms in one row, in reading order, brackets lined up inside
+  tidy(tops) {
+    const K = this.K;
+    const inZone = t => { const m = this.measure(t.node); const cy = t.y + m.h / 2; return cy > K.ZT && cy < K.ZB; };
+    const zone = tops.filter(inZone).sort((a, b) => Math.abs(a.y - b.y) > 60 ? a.y - b.y : a.x - b.x);
+    const cy = K.ZT + 110 + 49;
+    let x = 24 + (zone[0] && this.negCluster(zone[0].node) ? 46 : 0);
+    zone.forEach(t => {
+      this.walk(t.node, m => { if (m.t === 'sum') this.rowArrange(m); }, null, null);
+      const m = this.measure(t.node); t.x = x; t.y = cy - m.h / 2; x += m.w + K.GAP;
+    });
+    return tops;
+  }
+  // won: the expression is exactly the goal; the level's node is done (which can open new ones in the graph)
+  checkWin() {
+    const zt = this.zoneIds.length === 1 ? this.state.tops.find(t => t.node.id === this.zoneIds[0]) : null;
+    if (zt && this.state.goal && this.canon(zt.node) === this.canon(this.state.goal) && this.prog.done.indexOf(this.state.level) < 0) {
+      this.prog.done = this.prog.done.concat([this.state.level]);
+    }
+  }
+  // After each finished move (nothing being dragged): if the expression changed, record it in the level's history
+  // (dropping anything ahead after an undo), and tell the live proof. Undo and redo replay the move's own Lean steps
+  // (reversed for undo); rewind restarts the proof.
   noteBoard() {
-    const L = this.props.lean; if (!L || this.props.legacy || !this.zoneIds) return;
+    if (this.props.legacy || !this.zoneIds) return;
     if (this.drag || this.pdrag || this.idrag) return;
-    const t = this.zoneTree(); const key = JSON.stringify(t);
-    if (key === this._leanKey) { this._hint = null; return; }
-    const from = this._leanTree; this._leanKey = key; this._leanTree = t;
-    // a cancellation goes to Lean in two steps: first the terms rearranged so the pair sits together, then the law
-    const mid = this._leanMid; this._leanMid = null;
-    const sg = this._splitGroup; this._splitGroup = null;
-    if (sg) {
-      // a split: the law makes the pair as one bracket, then the bracket opens into the sum or product
-      this._leanGroup = sg; const m2 = this.zoneTree(); this._leanGroup = null;
-      L.boardChanged(from, m2, this._hint || null); L.boardChanged(m2, t, null);
-    } else if (mid && JSON.stringify(mid) !== JSON.stringify(from)) { L.boardChanged(from, mid, null); L.boardChanged(mid, t, this._hint || null); }
-    else L.boardChanged(from, t, this._hint || null);
+    const L = this.props.lean;
+    if (this._resync) { this._resync = false; this.syncLean(); return; }
+    const key = this.histKey();
+    if (this._histKey == null) this._histKey = key;
+    if (key === this._histKey) { this._hint = null; return; }
+    this._histKey = key;
+    const t = this.zoneTree(); const from = this._leanTree; this._leanTree = t;
+    const R = this._restoring; this._restoring = null;
+    let steps;
+    if (R) steps = R.steps;
+    else {
+      steps = [];
+      // a cancellation goes to Lean in two steps: first the terms rearranged so the pair sits together, then the law
+      const mid = this._leanMid; this._leanMid = null;
+      const sg = this._splitGroup; this._splitGroup = null;
+      if (sg) {
+        // a split: the law makes the pair as one bracket, then the bracket opens into the sum or product
+        this._leanGroup = sg; const m2 = this.zoneTree(); this._leanGroup = null;
+        steps.push([from, m2, this._hint || null], [m2, t, null]);
+      } else if (mid && JSON.stringify(mid) !== JSON.stringify(from)) steps.push([from, mid, null], [mid, t, this._hint || null]);
+      else steps.push([from, t, this._hint || null]);
+      const H = this.hist;
+      H.entries = H.entries.slice(0, H.idx + 1).concat([{ tops: this.clone(this.state.tops), steps: steps }]);
+      if (H.entries.length > 200) H.entries = H.entries.slice(H.entries.length - 200);
+      H.idx = H.entries.length - 1;
+      this.checkWin();
+    }
+    if (L) {
+      if (R && R.restart) L.setLevel(t, this.leanTree(this.state.goal));
+      else steps.forEach(st => L.boardChanged(st[0], st[1], st[2]));
+    }
+    this.savePlace();
     this._hint = null;
   }
   componentDidUpdate() { this.noteBoard(); }
   // The level's live proof starts from the board as it is now (its start) toward the goal
   initLean() {
-    const L = this.props.lean;
-    if (!L || this.props.legacy) return;
-    this._leanTree = this.zoneTree(); this._leanKey = JSON.stringify(this._leanTree);
-    L.setLevel(this._leanTree, this.leanTree(this.state.goal));
-    this._unsub = L.subscribe((status, live) => this.setState({ leanStatus: status, leanLive: live }));
+    if (this.props.legacy) return;
+    this.syncLean();
+    if (this.props.lean) this._unsub = this.props.lean.subscribe((status, live) => this.setState({ leanStatus: status, leanLive: live }));
+  }
+  // the live proof for the current level: from its start, with the moves up to where the player is replayed
+  syncLean() {
+    this._leanTree = this.zoneTree(); this._histKey = this.histKey();
+    const L = this.props.lean; if (!L) return;
+    const H = this.hist; const first = H.idx > 0 && H.entries[1].steps[0];
+    L.setLevel(first ? first[0] : this._leanTree, this.leanTree(this.state.goal));
+    for (let i = 1; i <= H.idx; i++) H.entries[i].steps.forEach(st => L.boardChanged(st[0], st[1], st[2]));
   }
   componentDidMount() {
     this.initLean();
@@ -492,7 +614,7 @@ export class Range extends Component {
     if (n.t === 's') {
       const sl = this.slideOf(n.id);
       const lk = this.look(n);
-      R.hexes.push({ id: n.id, x: x, y: y, dx: sl ? sl.x - x : 0, dy: sl ? sl.y - y : 0, face: lk.face, fg: lk.fg, lip: lk.lip, el: n.el, type: this.fieldSym(n.field), elSize: n.el.length > 3 ? 20 : 28,
+      R.hexes.push({ id: n.id, tr: this.state.histAnim ? 'left 0.4s ease, top 0.4s ease' : 'none', x: x, y: y, dx: sl ? sl.x - x : 0, dy: sl ? sl.y - y : 0, face: lk.face, fg: lk.fg, lip: lk.lip, el: n.el, type: this.fieldSym(n.field), elSize: n.el.length > 3 ? 20 : 28,
         band: ctx.abstract ? 'repeating-linear-gradient(135deg, #F2B33D 0 6px, #DFA02A 6px 12px)' : '#F2B33D', sink: ctx.abstract ? 3 : 0,
         z: z + (sl && sl.top ? 60 : 0), scale: dragging ? 1.04 : 1, shadow: dragging ? 14 : 7, anim: sl ? 'zeroIn 0.4s ease-out' : this._glow && this._glow.has(n.id) ? 'rgPulse 1.4s ease-in-out infinite' : 'none', down: this.onDown(n.id, 'self'), aria: 'Scalar ' + n.el + ' in ' + this.fieldSym(n.field) });
       return;
@@ -501,7 +623,7 @@ export class Range extends Component {
       const holding = this.state.holding === n.id;
       const sl = this.slideOf(n.id);
       const lk = this.look(n); const et = this.elText(n);
-      R.vecs.push({ id: n.id, x: x, y: y, w: n.w, type: n.type, el: et, elSize: et.length > 4 ? 21 : 27, face: lk.face, fg: lk.fg, lip: lk.lip,
+      R.vecs.push({ id: n.id, tr: this.state.histAnim ? 'left 0.4s ease, top 0.4s ease' : 'none', x: x, y: y, w: n.w, type: n.type, el: et, elSize: et.length > 4 ? 21 : 27, face: lk.face, fg: lk.fg, lip: lk.lip,
         hasField: !!n.field, fLabel: this.fieldSym(n.field), pieceScale: holding ? 0.9 : 1, pieceBg: holding ? '#F7CD6E' : '#F2B33D',
         z: z + (sl && sl.top ? 60 : 0), scale: dragging ? 1.04 : 1, shadow: dragging ? 14 : 7, down: this.onDown(n.id, 'self'), pieceDown: this.onDown(n.id, 'strip'),
         anim: sl ? 'zeroIn 0.4s ease-out' : this._glow && this._glow.has(n.id) ? 'rgPulse 1.4s ease-in-out infinite' : 'none', dx: sl ? sl.x - x : 0, dy: sl ? sl.y - y : 0,
@@ -672,6 +794,7 @@ export class Range extends Component {
     d.zeroHover = d.zero ? this.zeroTarget(pcx, pcy, d.zero.kind, Object.assign({ exclude: d.id }, d.zero))
       : d.absorb ? this.absorbTarget(d, pcx, pcy)
       : d.absorbOne ? this.oneAbsorbTarget(d, pcx, pcy)
+      : (d.zeroSmul && this.inRect(this.P.get(d.zeroSmul.vecId), pcx, pcy, -6)) ? { id: d.zeroSmul.prodId, glow: this.ids(this.locate(d.orig, d.zeroSmul.prodId).node), zs: true }
       : d.cancel ? this.cancelTarget(d, pcx, pcy) : null;
     if (d.mode === 'reorder' && d.zeroHover) {
       this.setState({ override: { id: d.id, x: d.gx + dx, y: d.gy + dy }, preview: null, zeroHover: d.zeroHover });
@@ -709,7 +832,7 @@ export class Range extends Component {
       return;
     }
     if (this.state.zeroHover) this.setState({ zeroHover: null });
-    if (d.zeroHover && (d.zeroHover.cancel ? this.applyCancel(d) : d.absorbOne ? this.absorbOne(d) : d.absorb ? this.absorbZero(d) : this.dropZero(d))) return;
+    if (d.zeroHover && (d.zeroHover.zs ? this.applyZeroSmul(d) : d.zeroHover.cancel ? this.applyCancel(d) : d.absorbOne ? this.absorbOne(d) : d.absorb ? this.absorbZero(d) : this.dropZero(d))) return;
     if (d.rules && d.preview) { this.applyPreview(d); return; }
     if (d.mode === 'reorder') { this._hint = ['mul_comm']; this.setState({ override: null, dragIds: null, preview: null }); return; }
     if (d.mode === 'move') { this.setState({ dragIds: null, preview: null }); return; }
@@ -1082,6 +1205,7 @@ export class Range extends Component {
       d.cancel = { kind: 'add', key: key, aId: A.node.id, chainIds: this.readingOrder(members, key).map(m => m.id), X: X };
     } else if (loc && loc.kind === 'factor') {
       const F = loc.node, P = loc.parent;
+      if (F.t === 's' && F.val === '0' && P.vec && this.prog.done.indexOf('1.30') >= 0 && this.state.level !== '1.30') { d.zeroSmul = { prodId: P.id, vecId: P.vec.id }; }
       if (F.t === 's' && F.val === '1') { d.absorbOne = { prodId: P.id, chainIds: P.factors.filter(f => f.id !== F.id).map(f => f.id).concat(P.vec ? [P.vec.id] : []) }; return; }
       const X = this.inverseMul(F); if (!X) return;
       d.cancel = { kind: 'mul', key: P.id, aId: F.id, chainIds: P.factors.map(f => f.id), X: X };
@@ -1116,9 +1240,26 @@ export class Range extends Component {
     const res = L.kind === 'add' ? (ty.k === 'v' ? this.mkV(ty.sp, '0', 'zero', ty.f || null, this.K.ZW) : this.mkS(ty.f, '0', '0')) : this.mkS(ty.f, '1', '1');
     this.setRef(tops, this.locate(tops, ids[0]), res);
     ids.slice(1).concat([L.aId]).forEach(id => { const l = this.locate(tops, id); if (l) this.setRef(tops, l, null); });
+    if (L.kind === 'add' && L.key !== 'zone') {
+      const sl = this.locate(tops, L.key);
+      if (sl && sl.node.t === 'sum' && !this.flagged(sl.node) && sl.node.terms.length === 1) {
+        if (sl.kind === 'top') tops[sl.ti].x += this.sumPadL(sl.node) + 26 + this.K.SPAD;
+        this.setRef(tops, sl, sl.node.terms[0].node);
+      }
+    }
     this._hint = L.kind === 'add' ? ['add_neg_cancel'] : ['arith'];
     this.setState({ tops: this.normTops(tops), dragIds: null, preview: null, override: null });
     this.flash(this.P.get(ids[0]), L.kind === 'add' ? 'additive inverses · they make 0' : name + ' and its inverse make 1', 'ok');
+    return true;
+  }
+  // 1.30, once won: the 0 of 0·𝑣 dropped on its vector makes the whole product the zero vector
+  applyZeroSmul(d) {
+    const tops = this.clone(d.orig); const l = this.locate(tops, d.zeroSmul.prodId); if (!l) return false;
+    const ty = this.typeOf(l.node);
+    this.setRef(tops, l, this.mkV(ty.sp, '0', 'zero', ty.f || null, this.K.ZW));
+    this._hint = ['zero_smul'];
+    this.setState({ tops: this.normTops(tops), dragIds: null, preview: null, override: null });
+    this.flash(this.P.get(d.zeroSmul.prodId), '0𝑣 = 0 · 1.30', 'ok');
     return true;
   }
   // a 1 in a product, over another tile of the same product: 1·x = x
@@ -1702,7 +1843,7 @@ export class Range extends Component {
       });
       return { key: key, title: title, y: y, on: on, tokens: tokens, toggle: () => this.setState({ tiles: Object.assign({}, this.state.tiles, { [key]: !on }) }) };
     };
-    return [build('assume', 'ASSUMPTIONS', K.AY, assume), build('goal', 'GOAL', K.GY, goal)];
+    return [build('assume', 'ASSUMPTIONS', K.AY, assume), build('goal', 'GOAL · ' + (St.level || ''), K.GY, goal)];
   }
   // [text, tile] pairs for a small expression tree (the goal): each scalar and vector gets its tile
   nodeTokens(n) {
@@ -1815,7 +1956,7 @@ export class Range extends Component {
   /* ---------- render ---------- */
   vecHtml(t) {
     return html`
-      <button onPointerDown=${t.down} aria-label=${t.aria} style=${`position: absolute; left: ${t.x}px; top: ${t.y}px; width: ${t.w}px; height: 88px; padding: 0; border: none; background: transparent; touch-action: none; cursor: grab; z-index: ${t.z}; transform: scale(${t.scale}); filter: drop-shadow(0 ${t.shadow}px 12px rgba(0,0,0,0.40)); animation: ${t.anim}; --dx: ${t.dx}px; --dy: ${t.dy}px; font-family: inherit`}>
+      <button key=${t.id} onPointerDown=${t.down} aria-label=${t.aria} style=${`transition: ${t.tr || 'none'}; position: absolute; left: ${t.x}px; top: ${t.y}px; width: ${t.w}px; height: 88px; padding: 0; border: none; background: transparent; touch-action: none; cursor: grab; z-index: ${t.z}; transform: scale(${t.scale}); filter: drop-shadow(0 ${t.shadow}px 12px rgba(0,0,0,0.40)); animation: ${t.anim}; --dx: ${t.dx}px; --dy: ${t.dy}px; font-family: inherit`}>
         <span style="position: absolute; left: 0; top: 5px; width: 52px; height: 83px; display: block; clip-path: polygon(0 0, 30px 0, 52px 50%, 30px 100%, 0 100%, 22px 50%); background: #B7791F"></span>
         <span style="position: absolute; left: 0; top: 0; width: 52px; height: 83px; display: block; clip-path: polygon(0 0, 30px 0, 52px 50%, 30px 100%, 0 100%, 22px 50%); background: #F1E7CD">
           <span style="position: absolute; left: 0; top: 0; width: 52px; height: 30px; display: block; background: #C38F2A; box-shadow: inset 0 3px 6px rgba(60,38,0,0.60)"></span>
@@ -1836,7 +1977,7 @@ export class Range extends Component {
   }
   hexHtml(t) {
     return html`
-      <button onPointerDown=${t.down} aria-label=${t.aria} style=${`position: absolute; left: ${t.x}px; top: ${t.y}px; width: 96px; height: 88px; padding: 0; border: none; background: transparent; touch-action: none; cursor: grab; z-index: ${t.z}; transform: translateY(${t.sink}px) scale(${t.scale}); filter: drop-shadow(0 ${t.shadow}px 12px rgba(0,0,0,0.40)); animation: ${t.anim}; --dx: ${t.dx}px; --dy: ${t.dy}px; font-family: inherit`}>
+      <button key=${t.id} onPointerDown=${t.down} aria-label=${t.aria} style=${`transition: ${t.tr || 'none'}; position: absolute; left: ${t.x}px; top: ${t.y}px; width: 96px; height: 88px; padding: 0; border: none; background: transparent; touch-action: none; cursor: grab; z-index: ${t.z}; transform: translateY(${t.sink}px) scale(${t.scale}); filter: drop-shadow(0 ${t.shadow}px 12px rgba(0,0,0,0.40)); animation: ${t.anim}; --dx: ${t.dx}px; --dy: ${t.dy}px; font-family: inherit`}>
         <span style="position: absolute; left: 0; top: 5px; width: 100%; height: 83px; display: block; clip-path: polygon(22px 0, calc(100% - 22px) 0, 100% 50%, calc(100% - 22px) 100%, 22px 100%, 0 50%); background: ${t.lip}"></span>
         <span style=${`position: absolute; left: 0; top: 0; width: 100%; height: 83px; display: flex; flex-direction: column; clip-path: polygon(22px 0, calc(100% - 22px) 0, 100% 50%, calc(100% - 22px) 100%, 22px 100%, 0 50%); background: ${t.face}`}>
           <span style=${`height: 30px; display: flex; align-items: center; justify-content: center; background: ${t.band}; box-shadow: ${t.bandShadow || 'none'}; color: ${t.bandFg || '#2A1D04'}; font-size: 17px; font-weight: 700`}>${t.type}</span>
@@ -1952,6 +2093,7 @@ export class Range extends Component {
       vecs: R.vecs.concat(this.props.legacy || zDrag ? [zeroTile] : [], this.draggedItem('vec')), hexes: R.hexes.concat(this.props.legacy || zsDrag ? [zeroHex] : [], poDrag ? [oneHex] : [], this.draggedItem('hex')),
       boxes: R.boxes,
       heads: this.props.legacy ? null : this.headVals(), won: won, sparks: sparks, exprY: this.K.ZT + 10,
+      hist: this.props.legacy ? null : { canUndo: this.canUndo(), canRedo: this.canRedo(), undo: () => this.undo(), redo: () => this.redo(), rewind: () => this.rewind() },
       tray: this.props.legacy ? null : this.trayVals(zs, zp, zeroHex, zeroTile, po, oneHex), dots: R.dots, strips: strips,
       parenSrc: ps ? { x: ps.x, y: ps.y, z: this.pdrag && this.pdrag.id === ps.id ? 990 : 5, op: rules ? 0.3 : 1, pe: rules ? 'none' : 'auto', down: this.pieceDown(ps) } : null,
       legacy: !!this.props.legacy, trayH: this.props.legacy ? 414 : 190,
@@ -2077,7 +2219,7 @@ export class Range extends Component {
         ` : v.tray.tab === 'tools' ? html`
           <div style=${`position: absolute; left: 0; right: 0; top: 64px; bottom: 0; overflow: hidden; border-top: 1px solid #E2E8F0`}>
             <div style=${`width: 390px; height: ${(v.tray.h - 64) * 390 / 560}px; transform: scale(${560 / 390}); transform-origin: 0 0`}>
-              <${ConceptGraph} onPlay=${v.tray.play} />
+              <${ConceptGraph} onPlay=${v.tray.play} onStart=${id => this.switchLevel(id)} done=${this.prog.done} active=${this.state.level} levels=${Object.keys(LEVELS)} />
             </div>
           </div>
         ` : html`
@@ -2086,6 +2228,14 @@ export class Range extends Component {
       </div>
     ` : null}
   </div>
+  ${v.hist ? html`
+    <div style="position: absolute; left: 12px; top: 12px; right: 12px; display: flex; align-items: flex-start; gap: 8px; z-index: 1000; pointer-events: none">
+      <div style="pointer-events: auto; min-width: 0; flex: 0 1 auto">${this.props.lean ? html`<${LeanPlay} lean=${this.props.lean} inline=${true} />` : null}</div>
+      ${[['rewind', 'Back to the start', v.hist.canUndo, v.hist.rewind, 'M7 6v12M19 6l-9 6 9 6z'], ['undo', 'Undo', v.hist.canUndo, v.hist.undo, 'M15 6l-7 6 7 6'], ['redo', 'Redo', v.hist.canRedo, v.hist.redo, 'M9 6l7 6-7 6']].map(([k, label, on, fn, d]) => html`
+        <button key=${k} onClick=${on ? fn : null} disabled=${!on} aria-label=${label} style=${`pointer-events: auto; flex: 0 0 auto; width: 44px; height: 44px; border-radius: 22px; border: 1.5px solid rgba(203,213,225,${on ? 0.45 : 0.2}); background: rgba(27,37,58,0.94); color: ${on ? '#E2E8F0' : '#475569'}; display: flex; align-items: center; justify-content: center; cursor: ${on ? 'pointer' : 'default'}; transition: color 0.2s ease, border-color 0.2s ease`}>
+          <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d=${d} fill=${k === 'rewind' ? 'currentColor' : 'none'} stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+        </button>`)}
+    </div>` : null}
 </div>
 `;
   }
