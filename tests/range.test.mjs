@@ -533,10 +533,8 @@ function treeItem(c, which) {
   return T.wraps.find(w => w.kind === which) || T.nodes.find(m => (m.kind === 'op' && m.sym === which) || (m.kind === 'leaf' && c.elText(m.node) === which));
 }
 function dragTree(c, which, tx, ty) {
-  const it = treeItem(c, which); it.down(ev(0, 0));
-  const d = c.idrag; const m = c.measure(d.node);
-  const dx = tx - (d.ox + m.w / 2), dy = ty - (d.oy + m.h / 2);
-  c.imove(ev(dx / 2, dy / 2)); c.renderVals(); c.imove(ev(dx, dy)); c.renderVals();
+  const it = treeItem(c, which); it.down(ev(0, 0));           // the finger starts at (0, 0) and ends on the target
+  c.imove(ev(tx / 2, ty / 2)); c.renderVals(); c.imove(ev(tx, ty)); c.renderVals();
   const hover = c.state.zeroHover; c.iend(); c.renderVals(); return hover;
 }
 const tapTree = (c, which) => { treeItem(c, which).down(ev(0, 0)); c.iend(); c.renderVals(); };
@@ -546,9 +544,8 @@ const makeLevel = () => makeLive({});
 const tap = (c, id) => { c.renderVals(); c.begin(id, 'self', ev(0, 0)); c.end(); c.renderVals(); };
 function dragItem(c, n, tx, ty) {
   const v = c.renderVals(); const t = v.tray.list.filter(x => x.t.el === n)[0].t;
-  t.down(ev(0, 0)); const d = c.idrag; const m = c.measure(d.node);
-  const dx = tx - (d.ox + m.w / 2), dy = ty - (d.oy + 44);
-  c.imove(ev(dx / 2, dy / 2)); c.renderVals(); c.imove(ev(dx, dy)); c.renderVals();
+  t.down(ev(0, 0));
+  c.imove(ev(tx / 2, ty / 2)); c.renderVals(); c.imove(ev(tx, ty)); c.renderVals();
   const hover = c.state.zeroHover; c.iend(); c.renderVals(); return hover;
 }
 
@@ -999,4 +996,17 @@ test('graph: a finished node leading to a still-hidden one shows a fading line, 
   done.add('1.30'); done.add('1.32');
   assert.equal(nodeState('1.40', done, '1.34'), 'partial');
   assert.equal(stubsFor(done, '1.34').filter(([d, n]) => n === '1.40').length, 0);
+});
+
+test('dragging a group from the tree: the finger decides the target, whatever part of the group is over it', () => {
+  const c = makeLevel();
+  dragPiece(c, 'PZ', ...centre(c, c.state.tops[0].node.vec.id));  // 0𝑣 + 0
+  tap(c, c.state.tops[0].node.vec.id);
+  tapTree(c, '·');                                                // −(0𝑣): a wide group
+  const z = c.state.tops.find(t => t.node.key === 'zero').node;
+  c.renderVals(); const p = c.P.get(z.id);
+  // the finger near the 0's left edge: the group's centre is far from the 0, but the finger is on it
+  const hover = dragTree(c, 'neg', p.x + 12, p.y + p.h / 2);
+  assert.equal(hover && hover.id, z.id);
+  assert.deepEqual(readout(c), ['0𝑣 − (0𝑣) + 0𝑣']);
 });

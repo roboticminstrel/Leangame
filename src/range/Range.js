@@ -1467,12 +1467,21 @@ export class Range extends Component {
     }
     return { a: a, b: b, key: key, op: 'add' };
   }
+  // a pointer event's position in board units
+  fingerAt(e) {
+    const U = this.unit(); const S = U.u * this.scaleNow();
+    return { x: (e.clientX - U.l) / S - this.state.panX, y: (e.clientY - U.t) / S - this.state.panY };
+  }
+  // A tree piece or tray item follows the finger (centred on it), and what it would split is whatever 0 (or 1) of
+  // its type is under the finger: the piece's type is known as a whole, so which part of it overlaps doesn't matter
   imove(e) {
     const d = this.idrag; const w = this.worldDelta(e, d);
     if (!d.moved && Math.abs(w.dx) + Math.abs(w.dy) < 8) return;
-    d.moved = true; d.x = d.ox + w.dx; d.y = d.oy + w.dy;
+    d.moved = true;
+    const fx = d.fx + w.dx, fy = d.fy + w.dy;
     const m = this.measure(d.node);
-    this.setState({ zeroHover: this.splitTarget(d.node, d.x + m.w / 2, d.y + m.h / 2), idragAt: { x: d.x, y: d.y } });
+    d.x = fx - m.w / 2; d.y = fy - m.h / 2;
+    this.setState({ zeroHover: this.splitTarget(d.node, fx, fy), idragAt: { x: d.x, y: d.y } });
   }
   iend() {
     const d = this.idrag; this.idrag = null;
@@ -1735,7 +1744,8 @@ export class Range extends Component {
     };
     const itemStart = it => (e, ox, oy) => {
       const w = toWorld(ox, oy);
-      this.idrag = { id: it.id, node: it.node, sx: e.clientX, sy: e.clientY, ox: w.x, oy: w.y, x: w.x, y: w.y, moved: false };
+      const f = this.fingerAt(e);
+      this.idrag = { id: it.id, node: it.node, sx: e.clientX, sy: e.clientY, ox: w.x, oy: w.y, x: w.x, y: w.y, fx: f.x, fy: f.y, moved: false };
     };
     const entries = [{ kind: 'hex', w: 96, t: zeroHex, start: pieceStart(zs) }, { kind: 'vec', w: this.K.ZW, t: zeroTile, start: pieceStart(zp) }]
       .concat(po ? [{ kind: 'hex', w: 96, t: oneHex, start: pieceStart(po) }] : [])
@@ -1757,7 +1767,8 @@ export class Range extends Component {
       const treeStart = (n, x, y) => e => {
         stop(e);
         const o = ov(x, y); const w = toWorld(o.ox, o.oy);
-        this.idrag = { id: n.id, node: this.cloneFresh(n), sx: e.clientX, sy: e.clientY, ox: w.x, oy: w.y, x: w.x, y: w.y, moved: false, tap: () => this.treeTap(n.id) };
+        const f = this.fingerAt(e);
+        this.idrag = { id: n.id, node: this.cloneFresh(n), sx: e.clientX, sy: e.clientY, ox: w.x, oy: w.y, x: w.x, y: w.y, fx: f.x, fy: f.y, moved: false, tap: () => this.treeTap(n.id) };
       };
       const opNode = id => this.treeFind(St.tree.root, id);
       tree = Object.assign({}, TV, { x: tx0, y: treeTop, scale: sc,
