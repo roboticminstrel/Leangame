@@ -20,6 +20,22 @@ export class Range extends Component {
   mkSum(terms) { return { id: this.nid('g'), t: 'sum', terms: terms }; }
   initialState() {
     const g = this.mkSum([{ node: this.mkS('R', '2', '2'), x: 0, y: 0 }, { node: this.mkS('R', '3', '3'), x: 146, y: 0 }]);
+    const base = { flash: null, spawnCount: 0, holding: null, override: null, dragIds: null, panX: 0, panY: 0, zoom: 1 };
+    if (!this.props.legacy) {
+      // Rules mode only; the tray holds the two zeros (0 in ℝ, 0 in 𝑉), each an endless supply
+      return Object.assign(base, {
+        rules: true,
+        tops: [
+          { node: this.mkProd([g], this.mkV('𝑉', '𝑣', 'v', 'R', 140)), x: 24, y: 164 },
+          { node: this.mkProd([this.mkS('R', '−1', '-1')], this.mkV('𝑉', '𝑣', 'v', 'R', 140)), x: 214, y: 352 }
+        ],
+        pieces: [
+          { id: 'PZS', kind: 'zeroS', field: 'R', x: 30, y: 600, hx: 30, hy: 600 },
+          { id: 'PZ', kind: 'zero', x: 150, y: 600, hx: 150, hy: 600 }
+        ]
+      });
+    }
+    // the original Sandbox board, with the full tray (kept for the tests of Sandbox moves)
     return {
       rules: false, flash: null, spawnCount: 0, holding: null, override: null, dragIds: null, panX: 0, panY: 0, zoom: 1,
       tops: [
@@ -827,7 +843,7 @@ export class Range extends Component {
     d.moved = true;
     const up = { pieces: this.state.pieces.map(p => p.id === d.id ? Object.assign({}, p, { x: d.ox + w.dx, y: d.oy + w.dy }) : p) };
     if (d.id === 'PZ') up.zeroHover = this.zeroTarget(d.ox + w.dx + this.K.ZW / 2, d.oy + w.dy + 44, 'v');
-    if (d.id === 'PZS') up.zeroHover = this.zeroTarget(d.ox + w.dx + 48, d.oy + w.dy + 44, 's');
+    if (d.id === 'PZS') up.zeroHover = this.zeroTarget(d.ox + w.dx + 48, d.oy + w.dy + 44, 's', { f: this.state.pieces.find(p => p.id === 'PZS').field });
     this.setState(up);
   }
   // What a dragged 0 is over: a tile of its kind ('v' vectors, 's' scalars), or the right bracket of a sum of that
@@ -869,6 +885,21 @@ export class Range extends Component {
     const name = this.label(tgt.node);
     this.flash(at, name + ' = ' + name + ' + 0 · additive identity', 'ok');
     return true;
+  }
+  // The expression as plain text, written straight from the tree: terms in reading order (left to right, then top
+  // to bottom), joined by +; sums in brackets; scalars multiplied with ·; a vector written right after its scalars.
+  // top: the expression zone's terms, which are a sum without brackets.
+  exprText(nodes, top) {
+    const pos = n => this.P.get(n.id) || { x: 0, y: 0 };
+    const order = ns => ns.slice().sort((a, b) => Math.abs(pos(a).y - pos(b).y) > 60 ? pos(a).y - pos(b).y : pos(a).x - pos(b).x);
+    const one = n => {
+      if (n.t === 's' || n.t === 'v') return n.el;
+      if (n.t === 'sum') return '(' + order(n.terms.map(t => t.node)).map(one).join(' + ') + ')';
+      const fs = n.factors.map(one).join('·');
+      return n.vec ? fs + one(n.vec) : fs;
+    };
+    const parts = order(nodes).map(one);
+    return top ? parts.join(' + ') : '(' + parts.join(' + ') + ')';
   }
   // a short text form of a term, for messages: −1·𝑣, (2 + 3)·𝑣
   label(n) {
@@ -1017,10 +1048,10 @@ export class Range extends Component {
       if (ok) { for (const t of zoneTops) { const e = this.evalN(t.node); if (!e) { val = null; break; } val = val ? this.addE(val, e) : e; if (!val) break; } }
       const red = { bg: 'rgba(248,113,113,0.16)', border: '#F87171', fg: '#FEE2E2' };
       const green = { bg: 'rgba(52,211,153,0.16)', border: '#34D399', fg: '#D1FAE5' };
-      if (ok && val) {
-        const t0 = types[0]; const f = types.map(t => t.f).find(Boolean);
-        results.push(Object.assign({ x: 24, y: 470, main: '= ' + this.fmtVal(val), note: t0.k === 's' ? 'in ' + this.fieldSym(t0.f) : 'in ' + t0.sp + (f ? ' over ' + this.fieldSym(f) : ', 𝐅 still abstract') }, green));
-      } else results.push(Object.assign({ x: 24, y: 470, main: 'Can’t add these', note: 'terms in the expression need the same type' }, red));
+      this.zoneValue = ok && val ? '= ' + this.fmtVal(val) : null; // the old readout, still used by the tests
+      const text = this.exprText(zoneTops.map(t => t.node), true);
+      if (ok && val) results.push(Object.assign({ x: 24, y: 470, main: text, note: '' }, green));
+      else results.push(Object.assign({ x: 24, y: 470, main: text, note: 'terms in the expression need the same type' }, red));
     }
     const ghosts = [];
     const HEXC = 'polygon(22px 0, calc(100% - 22px) 0, 100% 50%, calc(100% - 22px) 100%, 22px 100%, 0 50%)';
@@ -1062,7 +1093,7 @@ export class Range extends Component {
       aria: 'The zero vector: drag it onto a vector, or onto a vector sum’s right bracket, to add + 0' };
     const zs = St.pieces.find(p => p.kind === 'zeroS'); const zsDrag = !!(this.pdrag && this.pdrag.id === zs.id);
     const zsHover = zsDrag && St.zeroHover;
-    const zeroHex = { x: zs.x, y: zs.y, dx: 0, dy: 0, el: '0', elSize: 28, type: zsHover && zsHover.f ? this.fieldSym(zsHover.f) : '𝐅', band: '#F2B33D', sink: 0,
+    const zeroHex = { x: zs.x, y: zs.y, dx: 0, dy: 0, el: '0', elSize: 28, type: zs.field ? this.fieldSym(zs.field) : zsHover && zsHover.f ? this.fieldSym(zsHover.f) : '𝐅', band: '#F2B33D', sink: 0,
       z: zsDrag ? 990 : 6, scale: zsDrag ? 1.04 : 1, shadow: zsDrag ? 14 : 7, anim: 'none', down: this.pieceDown(zs),
       aria: 'The scalar zero: drag it onto a scalar, or onto a scalar sum’s right bracket, to add + 0' };
     return {
@@ -1072,7 +1103,8 @@ export class Range extends Component {
       zoomReset: () => this.setState({ zoom: 1, panX: 0, panY: 0 }), showReset: Math.abs(St.zoom - 1) > 0.01 || St.panX !== 0 || St.panY !== 0, zoomPct: Math.round(St.zoom * 100),
       zoneL: zb.l, zoneW: zb.r - zb.l,
       ghosts: ghosts, groups: R.groups, pluses: R.pluses, vecs: R.vecs.concat([zeroTile]), hexes: R.hexes.concat([zeroHex]), dots: R.dots, strips: strips,
-      parenSrc: { x: ps.x, y: ps.y, z: this.pdrag && this.pdrag.id === ps.id ? 990 : 5, op: rules ? 0.3 : 1, pe: rules ? 'none' : 'auto', down: this.pieceDown(ps) },
+      parenSrc: ps ? { x: ps.x, y: ps.y, z: this.pdrag && this.pdrag.id === ps.id ? 990 : 5, op: rules ? 0.3 : 1, pe: rules ? 'none' : 'auto', down: this.pieceDown(ps) } : null,
+      legacy: !!this.props.legacy, trayH: this.props.legacy ? 414 : 190,
       results: results, flashes: flashes,
       toggleRules: () => this.setState({ rules: !this.state.rules }),
       rulesStr: rules ? 'true' : 'false',
@@ -1082,7 +1114,7 @@ export class Range extends Component {
       trayOp: rules ? 0.5 : 1,
       modeName: rules ? 'RULES' : 'SANDBOX',
       modeLine: rules ? 'Only moves the axioms allow: reorder products, rearrange sums.' : 'Build freely: dock, undock and nest anything.',
-      hint: rules ? 'Drag sideways to reorder · drag a scalar into the brackets beside it, or pull brackets off a vector, to distribute · drop a scalar or vector on a match in another term to factor it out'
+      hint: rules ? 'Drag sideways to reorder · drag a scalar into the brackets beside it, or pull brackets off a vector, to distribute · drop a scalar or vector on a match to factor it out · drag a 0 onto a term to add + 0'
         : 'Scalars dock tip to tip or onto a vector’s edge · drop things inside ( + ) to add them · double-tap a + to tidy'
     };
   }
@@ -1097,9 +1129,9 @@ export class Range extends Component {
 
     <div style=${`position: absolute; left: ${v.zoneL}px; top: 126px; width: ${v.zoneW}px; height: 400px; box-sizing: border-box; border-radius: 24px; border: 2px dashed rgba(148,163,184,0.28); pointer-events: none`}></div>
     <div style="position: absolute; left: 28px; top: 136px; font-family: Inter, system-ui, sans-serif; font-size: 14px; font-weight: 700; letter-spacing: 0.12em; color: #94A3B8; pointer-events: none">EXPRESSION</div>
-    <div style=${`position: absolute; left: 10px; top: 546px; width: 540px; height: 414px; box-sizing: border-box; border-radius: 24px; border: 2px dashed rgba(148,163,184,0.28); background: rgba(255,255,255,0.02); opacity: ${v.trayOp}; pointer-events: none`}></div>
+    <div style=${`position: absolute; left: 10px; top: 546px; width: 540px; height: ${v.trayH}px; box-sizing: border-box; border-radius: 24px; border: 2px dashed rgba(148,163,184,0.28); background: rgba(255,255,255,0.02); opacity: ${v.trayOp}; pointer-events: none`}></div>
     <div style="position: absolute; left: 28px; top: 556px; font-family: Inter, system-ui, sans-serif; font-size: 14px; font-weight: 700; letter-spacing: 0.12em; color: #94A3B8; pointer-events: none">TRAY</div>
-    <div style="position: absolute; left: 150px; right: 30px; top: 553px; font-size: 18px; color: #CBD5E1; text-align: right; pointer-events: none">𝑈: the plane 𝑥 − 2𝑦 + 𝑧 = 0 in ℝ³</div>
+    ${v.legacy ? html`<div style="position: absolute; left: 150px; right: 30px; top: 553px; font-size: 18px; color: #CBD5E1; text-align: right; pointer-events: none">𝑈: the plane 𝑥 − 2𝑦 + 𝑧 = 0 in ℝ³</div>` : null}
 
     ${v.groups.map((g) => html`
       <div style=${`position: absolute; left: ${g.x}px; top: ${g.y}px; width: ${g.w}px; height: ${g.h}px; z-index: ${g.z}; pointer-events: none; transform: scale(${g.scale}); transform-origin: 50% 50%; animation: ${g.anim}`}>
@@ -1172,7 +1204,7 @@ export class Range extends Component {
       </button>
     `)}
 
-    <button onPointerDown=${v.parenSrc.down} aria-label="Sum space: drag out a pair of brackets" style=${`position: absolute; left: ${v.parenSrc.x}px; top: ${v.parenSrc.y}px; width: 150px; height: 64px; border-radius: 16px; border: 2px dashed rgba(203,213,225,0.55); background: rgba(255,255,255,0.07); color: #E2E8F0; font-size: 30px; touch-action: none; cursor: grab; z-index: ${v.parenSrc.z}; opacity: ${v.parenSrc.op}; pointer-events: ${v.parenSrc.pe}; font-family: inherit`}>( + )</button>
+    ${v.parenSrc ? html`<button onPointerDown=${v.parenSrc.down} aria-label="Sum space: drag out a pair of brackets" style=${`position: absolute; left: ${v.parenSrc.x}px; top: ${v.parenSrc.y}px; width: 150px; height: 64px; border-radius: 16px; border: 2px dashed rgba(203,213,225,0.55); background: rgba(255,255,255,0.07); color: #E2E8F0; font-size: 30px; touch-action: none; cursor: grab; z-index: ${v.parenSrc.z}; opacity: ${v.parenSrc.op}; pointer-events: ${v.parenSrc.pe}; font-family: inherit`}>( + )</button>` : null}
 
     ${v.results.map((r) => html`
       <div style=${`position: absolute; left: ${r.x}px; top: ${r.y}px; max-width: 520px; padding: 8px 16px; border-radius: 14px; background: ${r.bg}; border: 1.5px solid ${r.border}; color: ${r.fg}; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; pointer-events: none; z-index: 950`}>
@@ -1186,13 +1218,6 @@ export class Range extends Component {
 
   </div>
   <div style=${`position: absolute; left: 0; top: 0; width: 560px; height: ${v.overlayH}px; transform: scale(${v.baseScale}); transform-origin: 0 0; pointer-events: none`}>
-    <div style="position: absolute; left: 16px; top: 16px; width: 528px; height: 92px; box-sizing: border-box; padding: 14px 16px; border-radius: 20px; background: rgba(27,37,58,0.96); border: 1.5px solid rgba(255,255,255,0.14); box-shadow: 0 8px 20px rgba(0,0,0,0.35); display: flex; align-items: center; gap: 14px">
-      <div style="flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 4px">
-        <div style="font-family: Inter, system-ui, sans-serif; font-size: 15px; font-weight: 700; letter-spacing: 0.12em; color: #F2B33D">THE RANGE · ${v.modeName}</div>
-        <div style="font-size: 21px; line-height: 27px; color: #F8FAFC">${v.modeLine}</div>
-      </div>
-      <button onClick=${v.toggleRules} aria-pressed=${v.rulesStr} style=${`flex: 0 0 auto; width: 128px; height: 60px; border-radius: 16px; border: 2px solid ${v.ruleBorder}; background: ${v.ruleBg}; color: ${v.ruleFg}; box-shadow: ${v.ruleShadow}; transform: translateY(${v.ruleShift}px); font-family: Inter, system-ui, sans-serif; font-size: 21px; font-weight: 700; cursor: pointer; pointer-events: auto`}>Rules</button>
-    </div>
     <div style="position: absolute; right: 18px; bottom: 108px; display: flex; flex-direction: column; gap: 10px; pointer-events: auto">
       <button onClick=${v.zoomIn} aria-label="Zoom in" style="width: 60px; height: 60px; border-radius: 30px; border: 1.5px solid rgba(203,213,225,0.45); background: rgba(27,37,58,0.94); color: #E2E8F0; font-family: Inter, system-ui, sans-serif; font-size: 30px; line-height: 1; cursor: pointer">+</button>
       <button onClick=${v.zoomOut} aria-label="Zoom out" style="width: 60px; height: 60px; border-radius: 30px; border: 1.5px solid rgba(203,213,225,0.45); background: rgba(27,37,58,0.94); color: #E2E8F0; font-family: Inter, system-ui, sans-serif; font-size: 30px; line-height: 1; cursor: pointer">−</button>

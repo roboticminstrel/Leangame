@@ -7,7 +7,7 @@ import { Range } from '../src/range/Range.js';
 const SC = 390 / 560; // screen px per world unit at zoom 1 when no board has been measured
 
 function make() {
-  const c = new Range({});
+  const c = new Range({ legacy: true });
   c.setState = function (o) { Object.assign(this.state, typeof o === 'function' ? o(this.state) : o); };
   c.renderVals();
   return c;
@@ -17,7 +17,7 @@ const show = n => n.t === 's' || n.t === 'v' ? n.el
   : n.t === 'prod' ? n.factors.map(show).join('·') + (n.vec ? '·' + show(n.vec) : '')
   : '(' + n.terms.map(t => show(t.node)).join(' + ') + ')';
 const zone = c => c.state.tops.filter(t => c.zoneIds.includes(t.node.id)).map(t => show(t.node));
-const result = c => c.renderVals().results.map(r => r.main);
+const result = c => { c.renderVals(); return [c.zoneValue]; };
 const byEl = (c, el) => { let f = null; c.state.tops.forEach(t => c.walk(t.node, n => { if (!f && n.el === el) f = n; }, null, null)); return f; };
 
 // drag a piece so its centre lands on (tx, ty), in world units
@@ -328,4 +328,35 @@ test('the 0 tile in ℝ: centred on a scalar it adds; beside it, it still docks;
   c3.move(ev(pi.x - p3.x, pi.y - p3.y));
   assert.equal(c3.state.zeroHover, null, 'a real 0 is not offered to a complex scalar');
   c3.end();
+});
+
+// the board as it ships: Rules mode, only the two zeros in the tray
+function makeLive() {
+  const c = new Range({});
+  c.setState = function (o) { Object.assign(this.state, typeof o === 'function' ? o(this.state) : o); };
+  c.renderVals();
+  return c;
+}
+const readout = c => c.renderVals().results.map(r => r.main);
+
+test('live board: Rules mode, the tray holds just 0 in ℝ and 0 in 𝑉, and the readout is the expression', () => {
+  const c = makeLive();
+  assert.equal(c.state.rules, true);
+  assert.deepEqual(c.state.pieces.map(p => p.id), ['PZS', 'PZ']);
+  const v = c.renderVals();
+  assert.equal(v.vecs.length + v.hexes.length, 2 + 3 + 2, 'two vectors, three scalars, and the two tray zeros');
+  assert.equal(v.parenSrc, null);
+  assert.deepEqual(readout(c), ['(2 + 3)𝑣 + −1𝑣']);
+});
+
+test('live board: the readout follows the tree as moves change it', () => {
+  const c = makeLive();
+  const G = c.state.tops[0].node.factors[0];
+  dragPiece(c, 'PZS', ...rightBracket(c, G.id));
+  assert.deepEqual(readout(c), ['(2 + 3 + 0)𝑣 + −1𝑣']);
+  const v = c.state.tops.find(t => t.node.factors && t.node.factors[0].el === '−1').node.vec;
+  dragPiece(c, 'PZ', ...centre(c, v.id));
+  assert.deepEqual(readout(c), ['(2 + 3 + 0)𝑣 + −1𝑣 + 0']);
+  // the gold zero is in ℝ: it isn't offered to vectors
+  assert.equal(dragPiece(c, 'PZS', ...centre(c, v.id)), null);
 });
