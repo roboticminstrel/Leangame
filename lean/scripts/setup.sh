@@ -15,14 +15,14 @@ if ! command -v elan >/dev/null; then
   sh /tmp/elan-init.sh -y --default-toolchain none
 fi
 
-# The Mathlib files we import directly (their own imports come along automatically)
+# Mathlib normally downloads its whole cache (~9000 files) when it's first fetched as a dependency; skip that and
+# ask only for the modules we import (their own imports come along automatically).
+export MATHLIB_NO_CACHE_ON_UPDATE=1
 mapfile -t mods < <(grep -rhoE '^import Mathlib(\.[A-Za-z0-9_]+)+' Leangame.lean Leangame | sed 's/^import //' | sort -u)
-files=()
-for m in "${mods[@]}"; do files+=("${m//.//}.lean"); done
-echo "== Mathlib files: ${files[*]}"
+echo "== Mathlib modules: ${mods[*]}"
 
 echo "== fetching dependencies"
-lake exe cache get "${files[@]}"
+lake exe cache get "${mods[@]}"
 echo "== building Leangame and the REPL"
 lake build Leangame
 lake exe repl < /dev/null   # builds the REPL (with no input it exits at once)
