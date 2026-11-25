@@ -33,6 +33,9 @@ npm test           # node --test: gesture and evaluation tests for the Range
 - `src/main.js`, `src/html.js`: mounting and the `html` template tag
 - `vendor/`: Preact 10 and htm 3 (MIT, licenses alongside)
 - `tests/`: `node:test` suites that drive the component directly
+- `lean/`: the Lean project: vector spaces as Axler defines them (1.20) and the first results (1.26–1.32), on Mathlib
+- `server/`: the referee on the Lean machine: board moves in, Lean's verdict out (`python3 -m unittest discover -s server`)
+- `src/lean/`: the Play button, which wakes the Lean machine (it sleeps after 10 idle minutes)
 
 ## Deploying
 

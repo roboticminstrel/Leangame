@@ -1,0 +1,35 @@
+# Build the Lean project the way the Lean machine does at boot (lean/scripts/setup.sh), then run the referee's
+# self-test: known board moves through the real Lean REPL.
+name: Lean
+
+on:
+  push:
+    paths: ["lean/**", "server/**", ".github/workflows/lean.yml"]
+  pull_request:
+    paths: ["lean/**", "server/**", ".github/workflows/lean.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.elan
+            lean/.lake
+          key: lean-${{ hashFiles('lean/lean-toolchain', 'lean/lakefile.toml') }}-${{ hashFiles('lean/**/*.lean') }}
+          restore-keys: lean-${{ hashFiles('lean/lean-toolchain', 'lean/lakefile.toml') }}-
+      - name: Install Lean, the Mathlib files we use, and build
+        run: lean/scripts/setup.sh
+      - name: Disk used
+        run: du -sh ~/.elan lean/.lake lean/.lake/packages/* | sort -h
+      - name: Referee self-test
+        run: |
+          export PATH="$HOME/.elan/bin:$PATH"
+          python3 server/referee.py --selftest
