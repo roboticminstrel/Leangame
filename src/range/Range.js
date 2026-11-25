@@ -2286,7 +2286,7 @@ export class Range extends Component {
       ghosts: ghosts, groups: R.groups, pluses: R.pluses,
       vecs: R.vecs.concat(this.props.legacy || zDrag ? [zeroTile] : [], this.draggedItem('vec')), hexes: R.hexes.concat(this.props.legacy || zsDrag ? [zeroHex] : [], poDrag ? [oneHex] : [], this.draggedItem('hex')),
       boxes: R.boxes,
-      heads: this.props.legacy ? null : this.headVals(), won: won, sparks: sparks, exprY: this.K.ZT + 10,
+      heads: this.props.legacy ? null : this.headVals(), won: won, pickLevel: () => this.setState({ trayOpen: true, trayClosing: false, trayTab: 'tools' }), sparks: sparks, exprY: this.K.ZT + 10,
       hchip: this.hdrag && this.hdrag.moved ? { x: this.hdrag.x, y: this.hdrag.y, text: this.hdrag.text } : null,
       hist: this.props.legacy ? null : { canUndo: this.canUndo(), canRedo: this.canRedo(), undo: () => this.undo(), redo: () => this.redo(), rewind: () => this.rewind() },
       tray: this.props.legacy ? null : this.trayVals(zs, zp, zeroHex, zeroTile, po, oneHex), dots: R.dots, strips: strips,
@@ -2317,6 +2317,10 @@ export class Range extends Component {
     <div style=${`position: absolute; left: ${v.zoneL}px; top: ${v.zoneT}px; width: ${v.zoneW}px; height: ${v.zoneH}px; box-sizing: border-box; border-radius: 24px; border: 2px dashed rgba(148,163,184,0.28); pointer-events: none; transition: left 0.2s ease, top 0.2s ease, width 0.2s ease, height 0.2s ease; animation: ${v.won ? 'winBox 1.6s ease-out both' : 'none'}`}></div>
     <div style=${`position: absolute; left: 28px; top: ${v.exprY}px; font-family: Inter, system-ui, sans-serif; font-size: 14px; font-weight: 700; letter-spacing: 0.12em; color: ${v.won ? '#F2B33D' : '#94A3B8'}; pointer-events: none`}>EXPRESSION</div>
     ${(v.heads || []).map(h => this.headHtml(h, v.won))}
+    ${v.won ? html`<div role="status" style=${`position: absolute; left: ${v.zoneL + 6}px; top: ${v.zoneT + v.zoneH + 16}px; display: flex; align-items: center; gap: 14px; white-space: nowrap; transform-origin: 20% 50%; animation: trayPop 0.4s cubic-bezier(0.2, 1.5, 0.4, 1) 0.9s both; pointer-events: auto; z-index: 960`}>
+      <span style="font-family: Inter, system-ui, sans-serif; font-size: 22px; font-weight: 700; color: #FDE68A">You won!</span>
+      <button onClick=${v.pickLevel} style="height: 48px; padding: 0 20px; border-radius: 24px; border: 1.5px solid #F2B33D; background: rgba(242,179,61,0.16); color: #F2B33D; font-family: Inter, system-ui, sans-serif; font-size: 18px; font-weight: 700; cursor: pointer">Pick another level</button>
+    </div>` : null}
     ${v.hchip ? html`<div aria-hidden="true" style=${`position: absolute; left: ${v.hchip.x}px; top: ${v.hchip.y}px; transform: translate(-50%, -130%); padding: 10px 16px; border-radius: 14px; border: 1.5px solid #7DD3FC; background: rgba(14,116,144,0.85); color: #E0F2FE; font-family: 'STIX Two Text', serif; font-size: 21px; white-space: nowrap; z-index: 990; pointer-events: none; box-shadow: 0 8px 18px rgba(0,0,0,0.4)`}>${v.hchip.text}</div>` : null}
     ${v.sparks.map(k => html`<div aria-hidden="true" style=${`position: absolute; left: ${k.x}px; top: ${k.y}px; width: 10px; height: 10px; border-radius: 2px; background: #FDE68A; box-shadow: 0 0 8px rgba(253,230,138,0.9); transform: rotate(45deg); z-index: 970; pointer-events: none; --sx: ${k.sx}px; --sy: ${k.sy}px; animation: spark 0.9s ease-out ${k.delay}s both`}></div>`)}
     ${v.legacy ? html`<div style=${`position: absolute; left: 10px; top: 546px; width: 540px; height: ${v.trayH}px; box-sizing: border-box; border-radius: 24px; border: 2px dashed rgba(148,163,184,0.28); background: rgba(255,255,255,0.02); opacity: ${v.trayOp}; pointer-events: none`}></div>

@@ -1215,3 +1215,14 @@ test('progress saved before 1.27 had a level loses its unearned 1.27 once; later
   const c2 = makeLive({ store: won }); c2.renderVals();
   assert.equal(c2.has127(), true);
 });
+
+test('winning shows "You won!" with a button that opens the TOOLS tab', () => {
+  const c = makeLive({ store: memoryStore({ v: 2, done: DONE0, current: '1.30', places: {} }) });
+  let v = c.renderVals();
+  assert.equal(v.won, false);
+  c.setState({ tops: [{ node: c.mkV('𝑉', '0', 'zero', 'R', 110), x: 40, y: c.K.ZT + 60 }] });
+  v = c.renderVals();
+  assert.equal(v.won, true);
+  v.pickLevel();
+  assert.equal(c.state.trayTab, 'tools'); assert.equal(c.state.trayOpen, true);
+});
