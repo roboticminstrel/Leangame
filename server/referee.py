@@ -202,13 +202,24 @@ class Sessions:
             sid = f"s{self.n}"
             if len(self.live) > 50:
                 self.live.pop(next(iter(self.live)))
-            self.live[sid] = {"ps": sorries[0]["proofState"], "head": head, "tactics": [], "restarts": self.repl.restarts, "nhyps": len(hyps)}
+            self.live[sid] = {"ps": sorries[0]["proofState"], "head": head, "tactics": [], "restarts": self.repl.restarts, "nhyps": len(hyps), "obtained": []}
         return 200, {"ok": True, "sid": sid, "theorem": head, "goals": self.goals_of(r)}
 
     def step(self, body):
         s = self.live.get(body.get("sid"))
         if not s or s["restarts"] != self.repl.restarts:
             return 409, {"ok": False, "error": "session ended: start again"}
+        wit = body.get("witness")
+        if wit and wit.get("name") not in s["obtained"]:
+            # a witness from the inverse axiom, first: obtain ⟨y, h⟩ (its hypothesis is the next h)
+            if wit.get("h") != f"h{s['nhyps'] + 1}":
+                return 400, {"ok": False, "error": f"the next hypothesis is h{s['nhyps'] + 1}"}
+            otac = render.witness(wit.get("x"), wit.get("name"), wit.get("h"))
+            r0 = self.repl.raw({"tactic": otac, "proofState": s["ps"]})
+            errs0 = self.errors_of(r0)
+            if errs0 or "proofState" not in r0:
+                return 200, {"ok": False, "error": (errs0 or ["Lean refused the witness"])[0][:400], "goals": None}
+            s["ps"] = r0["proofState"]; s["tactics"].append(otac); s["nhyps"] += 1; s["obtained"].append(wit.get("name"))
         tac = render.step(body.get("from"), body.get("to"), body.get("hint"), s.get("nhyps", 0))
         r = self.repl.raw({"tactic": tac, "proofState": s["ps"]})
         errs = self.errors_of(r)
@@ -411,6 +422,39 @@ def selftest():
     checks.append(("live: level 1.27 (unique inverse, with hypotheses h1 h2) played through, whole proof compiles", ru.get("ok") and ru.get("done") and ru.get("verified")))
     if not ru.get("done"):
         print("     level 1.27 stopped at", json.dumps(cur), "->", json.dumps(ru)[:600], json.dumps(stu)[:300], flush=True)
+    # level 1.30 without negatives: 0v → 0v + 0 → (obtain y1, h1 : 0v + y1 = 0) 0v + (0v + y1) → 0v + 0v + y1
+    # → (0 + 0)v + y1 → 0v + y1 → 0
+    Y = {"v": "y1"}
+    seq4 = [({"add": [zv, {"zero": True}]}, ["add_zero"], None),
+            ({"add": [zv, {"add": [zv, Y]}]}, ["h1"], {"x": zv, "name": "y1", "h": "h1"}),
+            ({"add": [zv, zv, Y]}, None, None), ({"add": [{"smul": [{"add": [n(0), n(0)]}, w]}, Y]}, ["add_smul"], None),
+            ({"add": [zv, Y]}, ["add_zero"], None), ({"zero": True}, ["h1"], None)]
+    code, stw = ss.start({"start": zv, "goal": {"zero": True}})
+    cur, rw_ = zv, {}
+    for nxt, hint, wit in seq4:
+        rw_ = ss.step({"sid": stw.get("sid"), "from": cur, "to": nxt, "hint": hint, "witness": wit})[1]
+        if not rw_.get("ok"):
+            break
+        cur = nxt
+    checks.append(("live: level 1.30 by the inverse axiom's witness (no −), whole proof compiles", rw_.get("ok") and rw_.get("done") and rw_.get("verified")))
+    if not rw_.get("done"):
+        print("     1.30 by witness stopped at", json.dumps(cur), "->", json.dumps(rw_)[:600], flush=True)
+    # level 1.31: a0 = 0 the same way: a0 → a0 + 0 → a0 + (a0 + y1) → a0 + a0 + y1 → a(0 + 0) + y1 → a0 + y1 → 0
+    A = {"s": "a"}; a0 = {"smul": [A, {"zero": True}]}
+    seq5 = [({"add": [a0, {"zero": True}]}, ["add_zero"], None),
+            ({"add": [a0, {"add": [a0, Y]}]}, ["h1"], {"x": a0, "name": "y1", "h": "h1"}),
+            ({"add": [a0, a0, Y]}, None, None), ({"add": [{"smul": [A, {"add": [{"zero": True}, {"zero": True}]}]}, Y]}, ["smul_add"], None),
+            ({"add": [a0, Y]}, ["add_zero"], None), ({"zero": True}, ["h1"], None)]
+    code, sta = ss.start({"start": a0, "goal": {"zero": True}})
+    cur, ra = a0, {}
+    for nxt, hint, wit in seq5:
+        ra = ss.step({"sid": sta.get("sid"), "from": cur, "to": nxt, "hint": hint, "witness": wit})[1]
+        if not ra.get("ok"):
+            break
+        cur = nxt
+    checks.append(("live: level 1.31 (a0 = 0) by the witness, whole proof compiles", ra.get("ok") and ra.get("done") and ra.get("verified")))
+    if not ra.get("done"):
+        print("     1.31 stopped at", json.dumps(cur), "->", json.dumps(ra)[:600], flush=True)
     code, st2 = ss.start({"start": {"add": [u, w]}, "goal": {"add": [w, u]}})
     r3 = ss.step({"sid": st2.get("sid"), "from": {"add": [u, w]}, "to": {"add": [w, u]}})[1]
     checks.append(("live: rearranging a sum is a step (ac_rfl)", r3.get("ok") and r3.get("done") and r3.get("verified")))

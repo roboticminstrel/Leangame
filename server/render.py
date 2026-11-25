@@ -224,6 +224,20 @@ def alternatives(rules, lemmas=None):
     return tries
 
 
+WITNESS = re.compile(r"^y[1-9]$")
+
+
+def witness(x, name, hyp):
+    """`obtain ⟨y1, h3⟩ := Axler.AddLaws.exists_add_eq_zero x`: the inverse axiom (1.20) as it stands, some y with
+    x + y = 0, without the notation −x (which needs 1.27). name: the witness (y1…), hyp: its hypothesis (h1…)."""
+    if not isinstance(name, str) or not WITNESS.match(name) or not isinstance(hyp, str) or not HYP.match(hyp):
+        raise BadInput("a witness is named y1…y9, its hypothesis h1…h9")
+    w = _Walk()
+    if w.sort(x) != "V":
+        raise BadInput("the inverse axiom is about vectors")
+    return f"obtain ⟨{name}, {hyp}⟩ := Axler.AddLaws.exists_add_eq_zero {term(x)}"
+
+
 def step(frm, to, hint=None, nhyps=0):
     """The tactic for one move in the live proof. The goal is `current = goal`; this proves `current = next` with the
     move's rule (hint) or any rule, and leaves `next = goal`, closed at once when next is the goal itself. A hint h1…

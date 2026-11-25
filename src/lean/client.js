@@ -120,7 +120,7 @@ export function createLean({ fetch = globalThis.fetch ? globalThis.fetch.bind(gl
       const m = history[sent++];
       if (!m.from || !m.to) { setLive({ steps: live.steps.concat([{ ok: false, hint: m.hint, error: 'This position can’t be written in Lean yet' }]) }); continue; }
       lastTouch = now();
-      const r = await call('POST', '/check', { session: 'step', sid, from: m.from, to: m.to, hint: m.hint || [] });
+      const r = await call('POST', '/check', { session: 'step', sid, from: m.from, to: m.to, hint: m.hint || [], witness: m.witness || null });
       if (r.state === 'asleep' || r.state === 'booting') { sent--; return; }
       if (r.error && /session ended/.test(r.error)) { beginLive(); return; }
       const stepRow = { ok: !!r.ok, hint: m.hint, error: r.ok ? null : r.error };
@@ -134,8 +134,8 @@ export function createLean({ fetch = globalThis.fetch ? globalThis.fetch.bind(gl
     if (status.state === 'ready') beginLive();
   }
 
-  function boardChanged(from, to, hint) {
-    history.push({ from, to, hint });
+  function boardChanged(from, to, hint, witness) {
+    history.push({ from, to, hint, witness });
     if (sid) queue = queue.then(flush);
   }
 

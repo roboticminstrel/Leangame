@@ -6,8 +6,8 @@
 // are kept in the browser (localStorage), so leaving a level and coming back resumes it.
 
 // A level: build(R) gives its start (top-level terms), goal, and optionally hyps (hypotheses: { name (Lean, h1…),
-// label (shown), lhs, rhs } with each side a list of terms, a run in a sum) and vars (the vectors it declares, for
-// ASSUMPTIONS).
+// label (shown), lhs, rhs } with each side a list of terms, a run in a sum), vars (the vectors it declares, for
+// ASSUMPTIONS) and scalars (symbolic scalars it declares, [shown, field]).
 export const LEVELS = {
   '1.27': {
     id: '1.27', name: 'unique −𝑣',
@@ -24,6 +24,10 @@ export const LEVELS = {
   '1.30': {
     id: '1.30', name: '0𝑣 = 0',
     build: R => ({ start: [R.mkProd([R.mkS('R', '0', '0')], R.mkV('𝑉', '𝑣', 'v', 'R', 140))], goal: R.mkV('𝑉', '0', 'zero', 'R', 110) }),
+  },
+  '1.31': {
+    id: '1.31', name: '𝑎0 = 0',
+    build: R => ({ start: [R.mkProd([R.mkS('R', '𝑎', 'a')], R.mkV('𝑉', '0', 'zero', 'R', 110))], goal: R.mkV('𝑉', '0', 'zero', 'R', 110), scalars: [['𝑎', 'ℝ']] }),
   },
   '1.32': {
     id: '1.32', name: '(−1)𝑣 = −𝑣',

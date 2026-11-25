@@ -3,6 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Range } from '../src/range/Range.js';
+import { memoryStore, START_DONE as DONE0 } from '../src/levels.js';
 
 const SC = 390 / 560; // screen px per world unit at zoom 1 when no board has been measured
 
@@ -540,7 +541,9 @@ function dragTree(c, which, tx, ty) {
 const tapTree = (c, which) => { treeItem(c, which).down(ev(0, 0)); c.iend(); c.renderVals(); };
 
 // level 1, as it ships
-const makeLevel = () => makeLive({});
+// (with 1.27 won, so the tree offers −(…) for vectors; fresh progress gets the inverse axiom's ∃𝑤 instead)
+const makeLevel = () => makeLive({ store: memoryStore({ done: DONE0.concat(['1.27']) }) });
+const makeFresh = () => makeLive({ store: memoryStore() });
 const tap = (c, id) => { c.renderVals(); c.begin(id, 'self', ev(0, 0)); c.end(); c.renderVals(); };
 function dragItem(c, n, tx, ty) {
   const v = c.renderVals(); const t = v.tray.list.filter(x => x.t.el === n)[0].t;
@@ -599,11 +602,16 @@ test('tree: tapping a leaf makes it a night tile (in the tree only); tapping a v
   tapTree(c, '𝑣');
   assert.ok(treeItem(c, '−𝑣'), 'the leaf is now −𝑣');
   assert.deepEqual(readout(c), ['0𝑣'], 'the board is unchanged');
-  tapTree(c, '−𝑣');
+  tapTree(c, '−𝑣');                                   // → ∃𝑤 on the leaf
+  assert.deepEqual(c.renderVals().tray.tree.wraps.map(w => w.kind), ['wit']);
+  tapTree(c, '𝑣');                                    // → plain again
   tapTree(c, '·');
   let T = c.renderVals().tray.tree;
   assert.deepEqual(T.wraps.map(w => w.kind), ['neg']);
   assert.ok(T.boxes[0].neg, 'a night box around the subtree');
+  tapTree(c, '·');
+  T = c.renderVals().tray.tree;
+  assert.deepEqual(T.wraps.map(w => w.kind), ['wit'], 'then the inverse axiom (∃𝑤)');
   tapTree(c, '·');
   T = c.renderVals().tray.tree;
   assert.equal(T.wraps.length, 0);
@@ -685,7 +693,7 @@ test('reaching the goal plays the win: the expression is exactly 0 in 𝑉', () 
 test('the live proof: the board is sent as Lean trees, one finished move at a time, with the law it used', () => {
   const calls = [];
   const lean = { setLevel: (s, g) => calls.push(['level', s, g]), boardChanged: (f, t, h) => calls.push(['move', f, t, h]), subscribe: () => () => {} };
-  const c = makeLive({ lean });
+  const c = makeLive({ lean, store: memoryStore({ done: DONE0.concat(['1.27']) }) });
   c.initLean();
   assert.deepEqual(calls[0], ['level', { smul: [{ n: 0 }, { v: 'v' }] }, { zero: true }]);
   dragPiece(c, 'PZ', ...centre(c, c.state.tops[0].node.vec.id));   // 0𝑣 + 0
@@ -850,11 +858,11 @@ test('the TOOLS tab fills the screen with the concept graph; its current node ta
   assert.equal(nodeState('1.27', new Set(START_DONE), '1.30'), 'next', 'fresh progress: 1.27 is a level one step away');
   const done = new Set(START_DONE.concat(['1.27']));
   assert.equal(nodeState('1.27', done, '1.30'), 'done'); assert.equal(nodeState('1.30', done, '1.30'), 'active');
-  assert.equal(nodeState('1.33', done, '1.30'), 'next', 'one step away: shown grey');
+  assert.equal(nodeState('1.33', done, '1.30'), 'done', 'a definition: done once its prerequisites are');
   assert.equal(nodeState('1.32', done, '1.30'), 'partial', 'needs 1.30 too: shown with a dotted line, not playable');
   done.add('1.30');
   assert.equal(nodeState('1.32', done, '1.30'), 'next', 'once 1.30 is done, 1.32 is one step away');
-  assert.equal(NODES.length, 20);
+  assert.equal(NODES.length, 22, 'chapter 1, with 1.26 and 1.31');
   assert.ok(NODES.find(n => n.id === '1.30').f.length > 0, 'it has the book text');
   v.tray.play();
   assert.equal(c.renderVals().tray.closing, true, 'the panel slides away');
@@ -877,7 +885,7 @@ test('the proof stays hidden until a node is done', async () => {
 test('undo, redo and rewind walk the level\'s history; a new move overwrites what was ahead', () => {
   const c = makeAt({});
   after(c);
-  dragPiece(c, 'PZ', ...centre(c, c.state.tops[0].node.vec.id)); after(c);            // 0𝑣 + 0
+  dragPiece(c, 'PZ', ...centre(c, c.state.tops[0].node.vec.id)); after(c);            // 0𝑣 + 0 (no negation needed)
   dragPiece(c, 'PZS', ...centre(c, c.state.tops[0].node.factors[0].id)); after(c);    // (0 + 0)𝑣 + 0
   assert.deepEqual(readout(c), ['(0 + 0)𝑣 + 0']);
   let v = c.renderVals(); assert.equal(v.hist.canUndo, true); assert.equal(v.hist.canRedo, false);
@@ -934,7 +942,7 @@ test('winning marks the node done; levels keep their place when you switch away 
 });
 
 test('level 1.32 can be won with 1.30 unlocked: (−1)𝑣 → … → −𝑣', () => {
-  const store = freshStore({ done: levelsMod.START_DONE.concat(['1.30']), current: '1.32', places: {} });
+  const store = freshStore({ done: levelsMod.START_DONE.concat(['1.27', '1.30']), current: '1.32', places: {} });
   const c = makeLive({ store }); after(c);
   assert.deepEqual(readout(c), ['−1𝑣']);
   const T = c.state.tops[0].node;
@@ -1083,4 +1091,83 @@ test('level 1.27: unique additive inverse, with hypotheses h and h′ as moves; 
   assert.deepEqual(readout(c), ['𝑤′']);
   assert.equal(c.renderVals().won, true);
   assert.ok(c.prog.done.includes('1.27'));
+});
+
+test('definitions have no level: one counts as done once its prerequisites are; results need theirs won', async () => {
+  const { nodeState, effectiveDone } = await import('../src/graph/ConceptGraph.js');
+  const done = new Set(DONE0);
+  assert.equal(nodeState('1.33', done, '1.30'), 'done', 'subspace (a definition) follows from 1.20');
+  assert.ok(effectiveDone(done).has('1.36') && effectiveDone(done).has('1.41'), 'and the definitions after it');
+  assert.equal(nodeState('1.26', done, '1.30'), 'next'); assert.equal(nodeState('1.31', done, '1.30'), 'next');
+  assert.equal(nodeState('1.45', done, '1.30'), 'next', 'a result whose prerequisites are all definitions');
+});
+
+test('before 1.27 is won there is no −𝑥 for vectors: the tree offers ∃𝑤, and a plain vector split is refused', () => {
+  const c = makeFresh(); after(c);
+  dragPiece(c, 'PZ', ...centre(c, c.state.tops[0].node.vec.id)); after(c);     // 0𝑣 + 0
+  tap(c, c.state.tops[0].node.vec.id);
+  tapTree(c, '·');
+  assert.deepEqual(c.renderVals().tray.tree.wraps.map(w => w.kind), ['wit'], 'the inverse axiom, not −');
+  tapTree(c, '·');
+  tapTree(c, '𝑣');
+  assert.ok(!treeItem(c, '−𝑣'), 'no night 𝑣');
+  tapTree(c, '𝑣');                                                             // back to plain
+  const z = c.state.tops.find(t => t.node.key === 'zero').node;
+  dragTree(c, '𝑣', ...centre(c, z.id));
+  assert.deepEqual(readout(c), ['0𝑣 + 0'], 'refused: it would make −𝑣');
+  assert.match(c.state.flash.text, /needs 1.27/);
+});
+
+test('1.30 by the inverse axiom: 0𝑣 = 0𝑣 + 0 = 0𝑣 + (0𝑣 + 𝑤₁) = (0 + 0)𝑣 + 𝑤₁ = 0𝑣 + 𝑤₁ = 0, no negatives', () => {
+  const calls = [];
+  const lean = { setLevel: (a, g, hy) => calls.push(['level', a, g, hy]), boardChanged: (f, t, hn, w) => calls.push(['move', f, t, hn, w]), subscribe: () => () => {} };
+  const c = makeLive({ store: memoryStore(), lean }); after(c); c.initLean();
+  dragPiece(c, 'PZ', ...centre(c, c.state.tops[0].node.vec.id)); after(c);     // 0𝑣 + 0
+  tap(c, c.state.tops[0].node.vec.id); tapTree(c, '·');                          // ∃𝑤 on 0𝑣
+  const z = c.state.tops.find(t => t.node.key === 'zero').node;
+  dragTree(c, 'wit', ...centre(c, z.id)); after(c);
+  assert.deepEqual(readout(c), ['0𝑣 + 0𝑣 + 𝑤₁']);
+  const card = c.state.hyps.find(h => h.wit);
+  assert.equal(card.label, 'h₁'); assert.equal(card.name, 'h1');
+  const wstep = calls.find(x => x[0] === 'move' && x[4]);
+  assert.deepEqual(wstep[4], { x: { smul: [{ n: 0 }, { v: 'v' }] }, name: 'y1', h: 'h1' }, 'Lean obtains the witness');
+  assert.deepEqual(wstep[3], ['h1']);
+  const ps = c.state.tops.filter(t => t.node.t === 'prod').map(t => t.node);
+  dragTo(c, ps[1].vec.id, ...centre(c, ps[0].vec.id)); after(c);                // (0 + 0)𝑣 + 𝑤₁
+  assert.deepEqual(readout(c), ['(0 + 0)𝑣 + 𝑤₁']);
+  const G = c.state.tops.find(t => t.node.t === 'prod').node.factors[0];
+  dragTo(c, G.terms[1].node.id, ...centre(c, G.terms[0].node.id)); after(c);    // 0𝑣 + 𝑤₁
+  assert.deepEqual(readout(c), ['0𝑣 + 𝑤₁']);
+  dragHyp(c, 'h₁', ...centre(c, c.state.tops.find(t => t.node.t === 'prod').node.vec.id)); after(c);
+  assert.deepEqual(readout(c), ['0']);
+  assert.equal(c.renderVals().won, true);
+  // undo takes the card away with the move; redo brings it back
+  c.renderVals().hist.undo(); after(c); c.renderVals().hist.undo(); after(c); c.renderVals().hist.undo(); after(c); c.renderVals().hist.undo(); after(c);
+  assert.equal(c.state.hyps.filter(h => h.wit).length, 0);
+  c.renderVals().hist.redo(); after(c);
+  assert.equal(c.state.hyps.filter(h => h.wit).length, 1);
+});
+
+test('level 1.31: 𝑎0 = 0 the same way, with a symbolic scalar 𝑎', () => {
+  const c = makeLive({ store: memoryStore({ done: DONE0, current: '1.31', places: {} }) }); after(c);
+  assert.deepEqual(readout(c), ['𝑎0']);
+  assert.ok(c.renderVals().heads[0].tokens.map(k => k.t).join('').includes('(𝑎 : ℝ)'));
+  assert.deepEqual(c.leanTree(c.state.tops[0].node), { smul: [{ s: 'a' }, { zero: true }] });
+  dragPiece(c, 'PZ', ...centre(c, c.state.tops[0].node.vec.id)); after(c);     // 𝑎0 + 0
+  assert.deepEqual(readout(c), ['𝑎0 + 0']);
+  const P0 = c.state.tops.find(t => t.node.t === 'prod').node;
+  tap(c, P0.factors[0].id); tapTree(c, '·');
+  const z = c.state.tops.find(t => t.node.key === 'zero').node;
+  dragTree(c, 'wit', ...centre(c, z.id)); after(c);                             // 𝑎0 + 𝑎0 + 𝑤₁
+  assert.deepEqual(readout(c), ['𝑎0 + 𝑎0 + 𝑤₁']);
+  const ps = c.state.tops.filter(t => t.node.t === 'prod').map(t => t.node);
+  dragTo(c, ps[1].factors[0].id, ...centre(c, ps[0].factors[0].id)); after(c);  // 𝑎(0 + 0) + 𝑤₁
+  assert.deepEqual(readout(c), ['𝑎(0 + 0) + 𝑤₁']);
+  const S = c.state.tops.find(t => t.node.t === 'prod').node.vec;
+  dragTo(c, S.terms[1].node.id, ...centre(c, S.terms[0].node.id)); after(c);    // 𝑎0 + 𝑤₁
+  assert.deepEqual(readout(c), ['𝑎0 + 𝑤₁']);
+  dragHyp(c, 'h₁', ...centre(c, c.state.tops.find(t => t.node.t === 'prod').node.factors[0].id)); after(c);
+  assert.deepEqual(readout(c), ['0']);
+  assert.equal(c.renderVals().won, true);
+  assert.ok(c.prog.done.includes('1.31'));
 });

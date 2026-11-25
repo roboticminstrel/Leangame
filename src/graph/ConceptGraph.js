@@ -16,7 +16,14 @@ const rowY = r => 52 + r * 58 + (r <= 4 ? 0 : r <= 8 ? 1 : 2) * 34;
 const BANDS = [['1A · 𝐑ⁿ AND 𝐂ⁿ', 0, 4, '#EEF2F7'], ['1B · DEFINITION OF VECTOR SPACE', 5, 8, '#FFFFFF'], ['1C · SUBSPACES', 9, 13, '#EEF2F7']];
 // a node's state for the player: active (being played), done, next (every prerequisite done: playable), partial
 // (some prerequisites done, the rest on screen as next or active: shown, not playable yet), or hidden
-export function nodeState(id, done, active) {
+// Definitions have no level: one counts as done as soon as all its prerequisites are (results need their level won)
+export function effectiveDone(done) {
+  const eff = new Set(done); let grew = true;
+  while (grew) { grew = false; NODES.forEach(n => { if (n.kind === 'def' && !eff.has(n.id) && n.deps.every(d => eff.has(d))) { eff.add(n.id); grew = true; } }); }
+  return eff;
+}
+export function nodeState(id, doneIn, active) {
+  const done = effectiveDone(doneIn);
   if (id === active) return 'active';
   if (done.has(id)) return 'done';
   const n = NODES.find(x => x.id === id); if (!n) return 'hidden';
@@ -26,7 +33,8 @@ export function nodeState(id, done, active) {
 }
 // the statement without its proof: the blocks before the first proof block
 // the faded lines toward hidden nodes, for a given progress: [from, to]
-export function stubsFor(done, active) {
+export function stubsFor(doneIn, active) {
+  const done = effectiveDone(doneIn);
   const st = id => nodeState(id, done, active);
   const out = [];
   NODES.filter(n => st(n.id) === 'hidden').forEach(n => n.deps.forEach(d => { if (done.has(d)) out.push([d, n.id]); }));
@@ -51,7 +59,7 @@ export class ConceptGraph extends Component {
   }
 
   render() {
-    const done = new Set(this.props.done || []); const active = this.props.active;
+    const done = effectiveDone(this.props.done || []); const active = this.props.active;
     const levels = new Set(this.props.levels || []);
     const st = id => nodeState(id, done, active);
     const VIS = NODES.filter(n => st(n.id) !== 'hidden');
@@ -135,6 +143,7 @@ export class ConceptGraph extends Component {
           const s2 = st(sel.id); const has = levels.has(sel.id);
           const btn = (label, fn, dis) => html`<button onClick=${dis ? null : fn} disabled=${!!dis} style=${`align-self: flex-start; height: 44px; padding: 0 20px; border-radius: 22px; border: none; background: ${dis ? '#E2E8F0' : '#1E3A8A'}; color: ${dis ? '#64748B' : '#FFFFFF'}; font: inherit; font-size: 15px; font-weight: 700; cursor: ${dis ? 'default' : 'pointer'}`}>${label}</button>`;
           if (s2 === 'active') return btn('Return to level', () => { this.setState({ sel: null }); if (this.props.onPlay) this.props.onPlay(); });
+          if (sel.kind === 'def') return null; // definitions have no level
           if (s2 === 'next') return has ? btn('Start level', () => { this.setState({ sel: null }); if (this.props.onStart) this.props.onStart(sel.id); }) : btn('No level for this yet', null, true);
           return has ? btn('Replay level', () => { this.setState({ sel: null }); if (this.props.onStart) this.props.onStart(sel.id); }) : null;
         })()}

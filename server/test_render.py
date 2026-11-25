@@ -90,6 +90,15 @@ class Live(unittest.TestCase):
         with self.assertRaises(render.BadInput):
             render.theorem(v, u, hyps=[[a, v]])
 
+    def test_witness(self):
+        t = render.witness({"smul": [{"n": 0}, v]}, "y1", "h1")
+        self.assertEqual(t, "obtain ⟨y1, h1⟩ := Axler.AddLaws.exists_add_eq_zero ((0 : F) • v)")
+        for bad in [("x", "h1"), ("y1", "hh"), ("y1; #eval", "h1")]:
+            with self.assertRaises(render.BadInput):
+                render.witness(v, *bad)
+        with self.assertRaises(render.BadInput):
+            render.witness(a, "y1", "h1")  # scalars: not this axiom
+
     def test_auto(self):
         self.assertIn("| ac_rfl", render.move({"add": [u, v]}, {"add": [v, u]}, "auto"))
 
