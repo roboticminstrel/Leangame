@@ -1,11 +1,6 @@
 # Deploy the site to lean.interlinea.io (PROTOTYPE, written by Claude).
-# Infrastructure lives in roboticminstrel/Interlinea-proto (infra/terraform/lean.tf). After its apply, set these
-# repository variables here (Settings → Secrets and variables → Actions → Variables) from its outputs:
-#   (scripts/setup-github-deploy.sh sets them all)
-#   AWS_DEPLOY_ROLE_ARN    lean_deploy_role_arn
-#   LEAN_DISTRIBUTION_ID   lean_distribution_id
-#   AWS_REGION             the region Interlinea uses (us-east-2 if unset)
-# Until AWS_DEPLOY_ROLE_ARN is set, this workflow skips quietly.
+# Infrastructure: roboticminstrel/Interlinea-proto, infra/terraform/lean.tf. The role below exists once that's applied;
+# the CloudFront distribution id is read from SSM, so this repo needs no Actions variables (vars.* can still override).
 name: Deploy
 
 on:
@@ -25,10 +20,9 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    if: ${{ vars.AWS_DEPLOY_ROLE_ARN != '' }}
     env:
       BUCKET: ${{ vars.LEAN_BUCKET || 'lean-interlinea-io-site' }}
-      DISTRIBUTION_ID: ${{ vars.LEAN_DISTRIBUTION_ID }}
+      DISTRIBUTION_ID: ${{ vars.LEAN_DISTRIBUTION_ID }}   # empty: read from SSM
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -38,7 +32,7 @@ jobs:
         run: npm test
       - uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN || 'arn:aws:iam::589305835200:role/interlinea-lean-deploy' }}
           aws-region: ${{ vars.AWS_REGION || 'us-east-2' }}
       - name: Upload the site and refresh the cache
         run: scripts/deploy.sh

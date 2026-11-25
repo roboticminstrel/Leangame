@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Upload the static site to S3 and refresh CloudFront. Used by .github/workflows/deploy.yml; also works from your
-# own machine with an AWS login:  BUCKET=... DISTRIBUTION_ID=... scripts/deploy.sh
+# own machine with an AWS login:  BUCKET=lean-interlinea-io-site scripts/deploy.sh
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 : "${BUCKET:?set BUCKET (the lean site bucket)}"
-: "${DISTRIBUTION_ID:?set DISTRIBUTION_ID (the lean CloudFront distribution)}"
+: "${DISTRIBUTION_ID:=$(aws ssm get-parameter --region us-east-1 --name /interlinea/lean/distribution-id --query Parameter.Value --output text | tr -d '\r')}"
 
 site="$(mktemp -d)"
 trap 'rm -rf "$site"' EXIT

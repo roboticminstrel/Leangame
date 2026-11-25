@@ -36,6 +36,6 @@ npm test           # node --test: gesture and evaluation tests for the Range
 
 ## Deploying
 
-`main` deploys to **https://lean.interlinea.io** through `.github/workflows/deploy.yml` (S3 + CloudFront, signed in to AWS with GitHub OIDC; no stored keys). The infrastructure is in `roboticminstrel/Interlinea-proto` (`infra/terraform/lean.tf`). After it's applied, run `scripts/setup-github-deploy.sh ../Interlinea-proto` once (gh and AWS logins needed). It copies the outputs into this repo's Actions variables (`AWS_DEPLOY_ROLE_ARN`, `LEAN_DISTRIBUTION_ID`, `LEAN_BUCKET`, `AWS_REGION`), the same way Interlinea's own setup script does.
+`main` deploys to **https://lean.interlinea.io** through `.github/workflows/deploy.yml` (S3 + CloudFront, signed in to AWS with GitHub OIDC; no stored keys). The infrastructure is in `roboticminstrel/Interlinea-proto` (`infra/terraform/lean.tf`). Once that's applied, merging to `main` deploys; no repository variables are needed (the deploy role is fixed and the distribution id comes from SSM).
 
-Until `AWS_DEPLOY_ROLE_ARN` is set, the deploy job skips. `scripts/deploy.sh` also works by hand with `BUCKET` and `DISTRIBUTION_ID` set.
+`scripts/deploy.sh` also works by hand with an AWS login: `BUCKET=lean-interlinea-io-site scripts/deploy.sh`.
