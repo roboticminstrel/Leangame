@@ -7,7 +7,7 @@ export class Range extends Component {
   constructor(props) {
     super(props);
     this.uid = 1;
-    this.K = { BIT: 52, PAREN: 18, SPAD: 18, ZT: 126, ZB: 526, WW: 560 };
+    this.K = { BIT: 52, PAREN: 18, SPAD: 18, ZT: 126, ZB: 526, WW: 560, ZW: 110, GAP: 52 };
     this.P = new Map();
     this.M = new Map();
     this.state = this.initialState();
@@ -35,7 +35,8 @@ export class Range extends Component {
       pieces: [
         { id: 'P1', kind: 'strip', field: 'R', x: 22, y: 850, hx: 22, hy: 850 },
         { id: 'P2', kind: 'strip', field: 'C', x: 88, y: 850, hx: 88, hy: 850 },
-        { id: 'PS', kind: 'paren', x: 166, y: 842, hx: 166, hy: 842 }
+        { id: 'PS', kind: 'paren', x: 166, y: 842, hx: 166, hy: 842 },
+        { id: 'PZ', kind: 'zero', x: 342, y: 846, hx: 342, hy: 846 }
       ]
     };
   }
@@ -189,6 +190,7 @@ export class Range extends Component {
   addC(a, b) { return [a[0] + b[0], a[1] + b[1]]; }
   evalN(n) {
     if (n.t === 's') return { k: 's', c: this.cval(n.val) };
+    if (n.t === 'v' && n.key === 'zero') return { k: 'v', coords: null, coef: {}, zero: true };
     if (n.t === 'v') return n.key === 'u' ? { k: 'v', coords: [[1, 0], [2, 0], [3, 0]], coef: {} } : { k: 'v', coords: null, coef: { [n.el]: [1, 0] } };
     if (n.t === 'prod') {
       let c = [1, 0];
@@ -206,11 +208,13 @@ export class Range extends Component {
   }
   scaleV(v, c) {
     const coef = {}; Object.keys(v.coef).forEach(k => { coef[k] = this.mulC(v.coef[k], c); });
-    return { k: 'v', coords: v.coords ? v.coords.map(x => this.mulC(x, c)) : null, coef: coef };
+    return { k: 'v', coords: v.coords ? v.coords.map(x => this.mulC(x, c)) : null, coef: coef, zero: v.zero };
   }
   addE(a, b) {
     if (a.k !== b.k) return null;
     if (a.k === 's') return { k: 's', c: this.addC(a.c, b.c) };
+    if (a.zero) return b;
+    if (b.zero) return a;
     if (!!a.coords !== !!b.coords) return null;
     const coef = Object.assign({}, a.coef);
     Object.keys(b.coef).forEach(k => { coef[k] = coef[k] ? this.addC(coef[k], b.coef[k]) : b.coef[k]; });
@@ -345,9 +349,11 @@ export class Range extends Component {
     }
     if (n.t === 'v') {
       const holding = this.state.holding === n.id;
+      const sl = this.state.slide && this.state.slide.id === n.id ? this.state.slide : null;
       R.vecs.push({ x: x, y: y, w: n.w, type: n.type, el: n.el, elSize: n.el.length > 4 ? 21 : 27,
         hasField: !!n.field, fLabel: this.fieldSym(n.field), pieceScale: holding ? 0.9 : 1, pieceBg: holding ? '#F7CD6E' : '#F2B33D',
-        z: z, scale: dragging ? 1.04 : 1, shadow: dragging ? 14 : 7, anim: this._glow && this._glow.has(n.id) ? 'rgPulse 1.4s ease-in-out infinite' : 'none', down: this.onDown(n.id, 'self'), pieceDown: this.onDown(n.id, 'strip'),
+        z: z, scale: dragging ? 1.04 : 1, shadow: dragging ? 14 : 7, down: this.onDown(n.id, 'self'), pieceDown: this.onDown(n.id, 'strip'),
+        anim: sl ? 'zeroIn 0.4s ease-out' : this._glow && this._glow.has(n.id) ? 'rgPulse 1.4s ease-in-out infinite' : 'none', dx: sl ? sl.x - x : 0, dy: sl ? sl.y - y : 0,
         aria: 'Vector ' + n.el + ' in ' + n.type + (n.field ? ' over ' + this.fieldSym(n.field) : ', field not fixed') });
       return;
     }
@@ -800,7 +806,7 @@ export class Range extends Component {
   pieceDown(pc) {
     return e => {
       if (e && e.preventDefault) e.preventDefault();
-      if (this.state.rules) return;
+      if (this.state.rules && pc.kind !== 'zero') return;
       this.pdrag = { id: pc.id, sx: e.clientX, sy: e.clientY, ox: pc.x, oy: pc.y, moved: false };
     };
   }
@@ -808,13 +814,82 @@ export class Range extends Component {
     const d = this.pdrag; const w = this.worldDelta(e, d);
     if (!d.moved && Math.abs(w.dx) + Math.abs(w.dy) < 8) return;
     d.moved = true;
-    this.setState({ pieces: this.state.pieces.map(p => p.id === d.id ? Object.assign({}, p, { x: d.ox + w.dx, y: d.oy + w.dy }) : p) });
+    const up = { pieces: this.state.pieces.map(p => p.id === d.id ? Object.assign({}, p, { x: d.ox + w.dx, y: d.oy + w.dy }) : p) };
+    if (d.id === 'PZ') up.zeroHover = this.zeroTarget(d.ox + w.dx + this.K.ZW / 2, d.oy + w.dy + 44);
+    this.setState(up);
+  }
+  // What the dragged 0 is over: a vector tile, or a vector sum's right bracket (the deepest one, tiles first)
+  zeroTarget(cx, cy) {
+    let best = null;
+    const take = (n, depth, prio) => { if (!best || depth > best.depth || (depth === best.depth && prio > best.prio)) best = { id: n.id, depth: depth, prio: prio }; };
+    this.state.tops.forEach(t => this.walk(t.node, n => {
+      const p = this.P.get(n.id); if (!p) return;
+      if (n.t === 'v' && this.inRect(p, cx, cy, 6)) take(n, p.depth, 1);
+      else if (n.t === 'sum' && this.typeOf(n).k === 'v') {
+        const rb = { x: p.x + p.w - 34 - 10, y: p.y, w: 44, h: p.h };
+        if (this.inRect(rb, cx, cy, 6)) take(n, p.depth, 0);
+      }
+    }, null, null));
+    if (!best) return null;
+    const n = this.locate(this.state.tops, best.id).node;
+    return { id: n.id, sp: this.typeOf(n).sp, kind: n.t };
+  }
+  // v  ->  v + 0 (Axler 1.20, additive identity, read right to left). The 0 lands just right of its target, in the
+  // same sum: after a term, at the right end of a bracket, or in a new bracket (v + 0) for a vector on its own or
+  // docked after scalars. Returns the new 0, or null.
+  addZero(tops, id) {
+    const loc = this.locate(tops, id); if (!loc) return null;
+    const X = loc.node; const ty = this.typeOf(X);
+    if (ty.k !== 'v') return null;
+    const K = this.K;
+    const z = this.mkV(ty.sp, '0', 'zero', ty.f || null, K.ZW);
+    if (X.t === 'sum') {
+      let x1 = -K.GAP, y0 = -44, y1 = 44;
+      if (X.terms.length) { x1 = -1e9; y0 = 1e9; y1 = -1e9; }
+      X.terms.forEach(t => { const m = this.measure(t.node); x1 = Math.max(x1, t.x + m.w); y0 = Math.min(y0, t.y); y1 = Math.max(y1, t.y + m.h); });
+      X.terms.push({ node: z, x: x1 + K.GAP, y: (y0 + y1) / 2 - 44 });
+      return z;
+    }
+    const m = this.measure(X);
+    const beside = (list, t, inSame) => {
+      list.forEach(u => { if (u !== t && inSame(u) && u.x >= t.x + m.w - 1) u.x += K.ZW + K.GAP; });
+      list.splice(list.indexOf(t) + 1, 0, { node: z, x: t.x + m.w + K.GAP, y: t.y + m.h / 2 - 44 });
+    };
+    if (loc.kind === 'term') { beside(loc.parent.terms, loc.parent.terms[loc.idx], () => true); return z; }
+    if (loc.kind === 'top' && this.zoneIds.indexOf(X.id) >= 0) { beside(tops, tops[loc.ti], u => this.zoneIds.indexOf(u.node.id) >= 0); return z; }
+    const S = this.mkSum([{ node: X, x: 0, y: 0 }, { node: z, x: m.w + K.GAP, y: m.h / 2 - 44 }]);
+    if (loc.kind === 'top') {
+      const t = tops[loc.ti];
+      t.x -= this.sumPadL(S) + 26 + K.SPAD; // keep the vector where it was
+      // whatever sits to its right in the same row moves aside for the 0 and the closing bracket
+      tops.forEach(u => {
+        if (u === t) return;
+        const um = this.measure(u.node);
+        if (u.y < t.y + m.h && u.y + um.h > t.y && u.x >= t.x + m.w) u.x += K.ZW + K.GAP + K.SPAD + 34;
+      });
+    }
+    this.setRef(tops, loc, S);
+    return z;
   }
   pend() {
     const d = this.pdrag; this.pdrag = null;
     const pc = this.state.pieces.find(p => p.id === d.id);
     const home = this.state.pieces.map(p => p.id === d.id ? Object.assign({}, p, { x: p.hx, y: p.hy }) : p);
     let tops = this.clone(this.state.tops);
+    if (pc.kind === 'zero') {
+      const hit = d.moved ? this.state.zeroHover : null;
+      this.setState({ pieces: home, zeroHover: null });
+      if (!d.moved) { this.flash({ x: pc.hx, y: pc.hy }, 'Drag the 0 onto a vector, or a vector sum’s right bracket', 'info'); return; }
+      if (!hit) return;
+      const at = this.P.get(hit.id); const tgt = this.locate(tops, hit.id).node;
+      const z = this.addZero(tops, hit.id); if (!z) return;
+      this.setState({ tops: this.normTops(tops), slide: { id: z.id, x: pc.x, y: pc.y } });
+      clearTimeout(this._st);
+      this._st = setTimeout(() => this.setState({ slide: null }), 450);
+      const name = tgt.t === 'v' ? tgt.el : 'the sum';
+      this.flash(at, name + ' = ' + name + ' + 0 · additive identity', 'ok');
+      return;
+    }
     if (!d.moved) {
       if (pc.kind === 'strip') {
         const lists = { R: [['2', '2'], ['√2', '√2'], ['½', '½'], ['3', '3'], ['−1', '-1']], C: [['1 + 𝑖', '1+i'], ['−𝑖', '-i'], ['𝑖', 'i']] };
@@ -885,6 +960,7 @@ export class Range extends Component {
     this._ov = St.override;
     this._dset = new Set(St.dragIds || []);
     this._glow = St.preview && (St.preview.type === 'collect' || St.preview.type === 'collectV') ? new Set(St.preview.glow) : null;
+    if (St.zeroHover) this._glow = new Set([St.zeroHover.id]);
     const R = this.layout(St.tops);
     const zb = { l: 10, r: 550 };
     this.zoneIds.forEach(id => { const p = this.P.get(id); if (p) { zb.l = Math.min(zb.l, p.x - 24); zb.r = Math.max(zb.r, p.x + p.w + 24); } });
@@ -937,13 +1013,17 @@ export class Range extends Component {
     const strips = St.pieces.filter(p => p.kind === 'strip').map(p => ({ x: p.x, y: p.y, label: this.fieldSym(p.field), z: this.pdrag && this.pdrag.id === p.id ? 990 : 5,
       op: rules ? 0.3 : 1, pe: rules ? 'none' : 'auto', down: this.pieceDown(p), aria: 'Field ' + this.fieldSym(p.field) + ': slot onto a vector’s 𝐅, or tap for a scalar' }));
     const ps = St.pieces.find(p => p.kind === 'paren');
+    const zp = St.pieces.find(p => p.kind === 'zero'); const zDrag = !!(this.pdrag && this.pdrag.id === zp.id);
+    const zeroTile = { x: zp.x, y: zp.y, w: this.K.ZW, type: St.zeroHover ? (St.zeroHover.sp || '𝑉').split(' ')[0] : '𝑉', el: '0', elSize: 27,
+      hasField: false, z: zDrag ? 990 : 6, scale: zDrag ? 1.04 : 1, shadow: zDrag ? 14 : 7, anim: 'none', dx: 0, dy: 0, down: this.pieceDown(zp),
+      aria: 'The zero vector: drag it onto a vector, or onto a vector sum’s right bracket, to add + 0' };
     return {
       setBoard: this.setBoard, panDown: this.panDown(), panX: St.panX, panY: St.panY, worldScale: this.scaleNow(),
       baseScale: this.fitScale(), overlayH: (St.bh || 716) / this.fitScale(),
       zoomIn: () => this.zoomAround(this.state.zoom * 1.25), zoomOut: () => this.zoomAround(this.state.zoom / 1.25),
       zoomReset: () => this.setState({ zoom: 1, panX: 0, panY: 0 }), showReset: Math.abs(St.zoom - 1) > 0.01 || St.panX !== 0 || St.panY !== 0, zoomPct: Math.round(St.zoom * 100),
       zoneL: zb.l, zoneW: zb.r - zb.l,
-      ghosts: ghosts, groups: R.groups, pluses: R.pluses, vecs: R.vecs, hexes: R.hexes, dots: R.dots, strips: strips,
+      ghosts: ghosts, groups: R.groups, pluses: R.pluses, vecs: R.vecs.concat([zeroTile]), hexes: R.hexes, dots: R.dots, strips: strips,
       parenSrc: { x: ps.x, y: ps.y, z: this.pdrag && this.pdrag.id === ps.id ? 990 : 5, op: rules ? 0.3 : 1, pe: rules ? 'none' : 'auto', down: this.pieceDown(ps) },
       results: results, flashes: flashes,
       toggleRules: () => this.setState({ rules: !this.state.rules }),
@@ -994,7 +1074,7 @@ export class Range extends Component {
     `)}
 
     ${v.vecs.map((t) => html`
-      <button onPointerDown=${t.down} aria-label=${t.aria} style=${`position: absolute; left: ${t.x}px; top: ${t.y}px; width: ${t.w}px; height: 88px; padding: 0; border: none; background: transparent; touch-action: none; cursor: grab; z-index: ${t.z}; transform: scale(${t.scale}); filter: drop-shadow(0 ${t.shadow}px 12px rgba(0,0,0,0.40)); animation: ${t.anim}; font-family: inherit`}>
+      <button onPointerDown=${t.down} aria-label=${t.aria} style=${`position: absolute; left: ${t.x}px; top: ${t.y}px; width: ${t.w}px; height: 88px; padding: 0; border: none; background: transparent; touch-action: none; cursor: grab; z-index: ${t.z}; transform: scale(${t.scale}); filter: drop-shadow(0 ${t.shadow}px 12px rgba(0,0,0,0.40)); animation: ${t.anim}; --dx: ${t.dx}px; --dy: ${t.dy}px; font-family: inherit`}>
         <span style="position: absolute; left: 0; top: 5px; width: 52px; height: 83px; display: block; clip-path: polygon(0 0, 30px 0, 52px 50%, 30px 100%, 0 100%, 22px 50%); background: #B7791F"></span>
         <span style="position: absolute; left: 0; top: 0; width: 52px; height: 83px; display: block; clip-path: polygon(0 0, 30px 0, 52px 50%, 30px 100%, 0 100%, 22px 50%); background: #F1E7CD">
           <span style="position: absolute; left: 0; top: 0; width: 52px; height: 30px; display: block; background: #C38F2A; box-shadow: inset 0 3px 6px rgba(60,38,0,0.60)"></span>

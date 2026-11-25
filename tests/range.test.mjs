@@ -171,3 +171,80 @@ test('a bracket inside a sum collapses into it', () => {
   const tops = c.normTops([{ node: g, x: 20, y: 200 }, { node: c.mkS('R', '5', '5'), x: 400, y: 200 }]);
   assert.deepEqual(tops.map(t => show(t.node)), ['2', '3', '5']);
 });
+
+// drag a tray piece so its centre lands on (tx, ty); returns what it was hovering just before release
+function dragPiece(c, pid, tx, ty) {
+  c.renderVals();
+  const pc = c.state.pieces.find(p => p.id === pid);
+  const dx = tx - (pc.x + c.K.ZW / 2), dy = ty - (pc.y + 44);
+  c.pieceDown(pc)(ev(0, 0));
+  c.pmove(ev(dx / 2, dy / 2)); c.renderVals();
+  c.pmove(ev(dx, dy)); c.renderVals();
+  const hover = c.state.zeroHover;
+  c.pend(); c.renderVals();
+  return hover;
+}
+const centre = (c, id) => { c.renderVals(); const p = c.P.get(id); return [p.x + p.w / 2, p.y + p.h / 2]; };
+const rightBracket = (c, id) => { c.renderVals(); const p = c.P.get(id); return [p.x + p.w - 17, p.y + p.h / 2]; };
+
+test('zero: dropped on a vector on its own, it becomes (w + 0), with the 0 to the right', () => {
+  const c = make();
+  const w = byEl(c, '𝑤');
+  const plusesBefore = c.renderVals().pluses.filter(p => p.op === 1).length;
+  const u = byEl(c, '(1, 2, 3)'); const ux = c.state.tops.find(t => t.node.id === u.id).x;
+  const hover = dragPiece(c, 'PZ', ...centre(c, w.id));
+  assert.equal(hover.id, w.id);
+  const top = c.state.tops.find(t => t.node.t === 'sum' && t.node.terms.some(u => u.node.id === w.id));
+  assert.ok(top, 'w is now in a sum');
+  assert.equal(show(top.node), '(𝑤 + 0)');
+  const [a, b] = top.node.terms;
+  assert.ok(b.x > a.x, 'the 0 sits right of w');
+  assert.equal(b.node.type, '𝑊', 'it is the zero of w’s space');
+  assert.equal(c.renderVals().pluses.filter(p => p.op === 1).length, plusesBefore + 1, 'one new plus');
+  const sumRight = c.P.get(top.node.id).x + c.P.get(top.node.id).w;
+  assert.ok(c.state.tops.find(t => t.node.id === u.id).x > ux && c.P.get(u.id).x >= sumRight, '𝑈 moved aside');
+  assert.match(c.state.flash.text, /𝑤 = 𝑤 \+ 0/);
+});
+
+test('zero: on a docked vector it makes a(v + 0), and the value is unchanged', () => {
+  const c = make();
+  const v = c.state.tops[0].node.vec;
+  dragPiece(c, 'PZ', ...centre(c, v.id));
+  assert.equal(show(c.state.tops[0].node), '(2 + 3)·(𝑣 + 0)');
+  assert.deepEqual(result(c), ['= 4𝑣']);
+});
+
+test('zero: hovering a vector sum’s right bracket highlights the whole bracket; the 0 joins at the right end', () => {
+  const c = make();
+  const w = byEl(c, '𝑤');
+  dragPiece(c, 'PZ', ...centre(c, w.id));
+  const S = c.state.tops.find(t => t.node.t === 'sum' && t.node.terms.some(u => u.node.id === w.id)).node;
+  // hover, without releasing
+  c.renderVals();
+  const pc = c.state.pieces.find(p => p.id === 'PZ');
+  const [tx, ty] = rightBracket(c, S.id);
+  c.pieceDown(pc)(ev(0, 0));
+  c.pmove(ev(tx - (pc.x + c.K.ZW / 2), ty - (pc.y + 44)));
+  assert.equal(c.state.zeroHover.id, S.id);
+  const g = c.renderVals().groups.find(x => x.anim.includes('rgPulse'));
+  assert.ok(g, 'the bracket pair glows');
+  c.pend(); c.renderVals();
+  const S2 = c.state.tops.find(t => t.node.id === S.id).node;
+  assert.equal(show(S2), '(𝑤 + 0 + 0)');
+  const xs = S2.terms.map(t => t.x);
+  assert.ok(xs[2] > xs[1] && xs[1] > xs[0], 'the new 0 is the rightmost term');
+});
+
+test('zero: works in Rules mode; dropped on empty board it goes home; tapped it explains itself', () => {
+  const c = make();
+  c.setState({ rules: true });
+  const before = JSON.stringify(c.state.tops.map(t => show(t.node)));
+  dragPiece(c, 'PZ', 500, 300);
+  assert.equal(JSON.stringify(c.state.tops.map(t => show(t.node))), before, 'nothing changed');
+  const pz = c.state.pieces.find(p => p.id === 'PZ'); assert.equal(pz.x, pz.hx);
+  const v = c.state.tops[1].node.vec;
+  dragPiece(c, 'PZ', ...centre(c, v.id));
+  assert.equal(show(c.state.tops.find(t => t.node.t === 'prod' && t.node.factors[0].el === '−1').node), '−1·(𝑣 + 0)');
+  c.pieceDown(c.state.pieces.find(p => p.id === 'PZ'))(ev(0, 0)); c.pend();
+  assert.match(c.state.flash.text, /Drag the 0 onto a vector/);
+});
