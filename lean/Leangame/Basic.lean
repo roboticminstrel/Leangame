@@ -67,6 +67,18 @@ protected theorem eq_zero_of_add_self {x : V} (h : x + x = x) : x = 0 :=
 
 end AddLaws
 
+section Scalars
+
+variable {F : Type u} [Field F]
+
+/-- `+` and `*` on scalars are associative and commutative, for `ac_rfl` (rearranged sums and products of scalars). -/
+instance fieldAddAssoc : Std.Associative (α := F) (· + ·) := ⟨add_assoc⟩
+instance fieldAddComm : Std.Commutative (α := F) (· + ·) := ⟨add_comm⟩
+instance fieldMulAssoc : Std.Associative (α := F) (· * ·) := ⟨mul_assoc⟩
+instance fieldMulComm : Std.Commutative (α := F) (· * ·) := ⟨mul_comm⟩
+
+end Scalars
+
 namespace VectorSpace
 
 variable {F : Type u} {V : Type v} [Field F] [Add V] [Zero V] [Neg V] [SMul F V] [AddLaws V] [VectorSpace F V]

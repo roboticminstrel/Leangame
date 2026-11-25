@@ -352,6 +352,13 @@ def selftest():
     r2 = ss.step({"sid": sid, "from": mid, "to": goal, "hint": ["add_smul"]})[1]
     checks.append(("live: distributing reaches the goal: no goals", r2.get("ok") and r2.get("done")))
     checks.append(("live: the whole proof compiles", r2.get("verified") is True))
+    zv = {"smul": [n(0), w]}
+    code, st3 = ss.start({"start": {"add": [zv, {"neg": zv}]}, "goal": {"zero": True}})
+    r4 = ss.step({"sid": st3.get("sid"), "from": {"add": [zv, {"neg": zv}]}, "to": {"zero": True}, "hint": ["add_neg_cancel"]})[1]
+    checks.append(("live: a group and its −(…) cancel to 0", r4.get("ok") and r4.get("done") and r4.get("verified")))
+    code, st4 = ss.start({"start": {"smul": [{"mul": [n(2), {"inv": n(2)}]}, w]}, "goal": {"smul": [n(1), w]}})
+    r5 = ss.step({"sid": st4.get("sid"), "from": {"smul": [{"mul": [n(2), {"inv": n(2)}]}, w]}, "to": {"smul": [n(1), w]}, "hint": ["arith"]})[1]
+    checks.append(("live: 2·2⁻¹ becomes 1 (norm_num, characteristic 0)", r5.get("ok") and r5.get("done") and r5.get("verified")))
     code, st2 = ss.start({"start": {"add": [u, w]}, "goal": {"add": [w, u]}})
     r3 = ss.step({"sid": st2.get("sid"), "from": {"add": [u, w]}, "to": {"add": [w, u]}})[1]
     checks.append(("live: rearranging a sum is a step (ac_rfl)", r3.get("ok") and r3.get("done") and r3.get("verified")))
@@ -359,7 +366,7 @@ def selftest():
         bad += not good
         print(f"{'ok  ' if good else 'FAIL'} {name}", flush=True)
     if any(not g for _, g in checks):
-        print("     details:", json.dumps({"start": st, "r1": r1, "r2": r2, "r3": r3})[:1500], flush=True)
+        print("     details:", json.dumps({"start": st, "r1": r1, "r2": r2, "r3": r3, "r4": r4, "r5": r5})[:3000], flush=True)
     print(f"live proof: {time.time() - t:.2f}s", flush=True)
     repl.stop()
     print("selftest:", "passed" if not bad else f"{bad} failed")

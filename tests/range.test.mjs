@@ -342,7 +342,7 @@ const readout = c => c.renderVals().results.map(r => r.main);
 test('live board: Rules mode, the tray holds just 0 in ℝ and 0 in 𝑉, and the readout is the expression', () => {
   const c = makeLive();
   assert.equal(c.state.rules, true);
-  assert.deepEqual(c.state.pieces.map(p => p.id), ['PZS', 'PZ']);
+  assert.deepEqual(c.state.pieces.map(p => p.id), ['PZS', 'PZ', 'PO']);
   const v = c.renderVals();
   assert.equal(v.vecs.length + v.hexes.length, 2 + 3, 'two vectors and three scalars: the tray is a popup, not on the board');
   assert.equal(v.tray.open, false, 'the tray starts closed');
@@ -526,6 +526,20 @@ test('the expression box hugs its tiles and always holds the heading and readout
   assert.ok(v.zoneL + v.zoneW < r0 + 250, 'and shrank back on the right');
 });
 
+// drag something out of the tray's tree: a leaf (by its text), an operator ('·', '+'), or a − / ⁻¹ node ('neg', 'inv')
+function treeItem(c, which) {
+  const T = c.renderVals().tray.tree;
+  return T.wraps.find(w => w.kind === which) || T.nodes.find(m => (m.kind === 'op' && m.sym === which) || (m.kind === 'leaf' && c.elText(m.node) === which));
+}
+function dragTree(c, which, tx, ty) {
+  const it = treeItem(c, which); it.down(ev(0, 0));
+  const d = c.idrag; const m = c.measure(d.node);
+  const dx = tx - (d.ox + m.w / 2), dy = ty - (d.oy + m.h / 2);
+  c.imove(ev(dx / 2, dy / 2)); c.renderVals(); c.imove(ev(dx, dy)); c.renderVals();
+  const hover = c.state.zeroHover; c.iend(); c.renderVals(); return hover;
+}
+const tapTree = (c, which) => { treeItem(c, which).down(ev(0, 0)); c.iend(); c.renderVals(); };
+
 // level 1, as it ships
 const makeLevel = () => makeLive({});
 const tap = (c, id) => { c.renderVals(); c.begin(id, 'self', ev(0, 0)); c.end(); c.renderVals(); };
@@ -562,18 +576,67 @@ test('tapping a header switches its tiles off and on (the token widths animate b
   assert.equal(vTok().width, vTok().W);
 });
 
-test('tapping a tile puts it and its inverse in the tray (once), opening the tray with the new ones popping in', () => {
+test('tapping a tile shows its group as a tree in the tray: operators as nodes, tiles as leaves', () => {
   const c = makeLevel();
-  const T = c.state.tops[0].node;
-  tap(c, T.vec.id);
-  let v = c.renderVals();
+  tap(c, c.state.tops[0].node.vec.id);
+  const v = c.renderVals();
   assert.equal(v.tray.show, true);
-  assert.deepEqual(c.state.trayItems.map(it => c.elText(it.node)), ['𝑣', '−𝑣']);
-  assert.ok(v.tray.list.slice(2).every(x => x.t.anim.startsWith('trayPop')), 'new items pop in');
-  tap(c, T.vec.id);
-  assert.equal(c.state.trayItems.length, 2, 'not added twice');
-  tap(c, T.factors[0].id);                       // the scalar 0 is its own inverse
-  assert.deepEqual(c.state.trayItems.map(it => c.elText(it.node)), ['𝑣', '−𝑣', '0']);
+  const T = v.tray.tree;
+  assert.deepEqual(T.nodes.map(m => m.kind === 'op' ? m.sym : c.elText(m.node)), ['·', '0', '𝑣']);
+  assert.equal(T.edges.length, 2);
+  // leaves sit below their operator
+  assert.ok(T.nodes[1].y > T.nodes[0].y && T.nodes[2].y > T.nodes[0].y);
+});
+
+test('tree: tapping a leaf makes it a night tile (in the tree only); tapping a vector operator toggles −(…) with a pop', () => {
+  const c = makeLevel();
+  tap(c, c.state.tops[0].node.vec.id);
+  tapTree(c, '𝑣');
+  assert.ok(treeItem(c, '−𝑣'), 'the leaf is now −𝑣');
+  assert.deepEqual(readout(c), ['0𝑣'], 'the board is unchanged');
+  tapTree(c, '−𝑣');
+  tapTree(c, '·');
+  let T = c.renderVals().tray.tree;
+  assert.deepEqual(T.wraps.map(w => w.kind), ['neg']);
+  assert.ok(T.boxes[0].neg, 'a night box around the subtree');
+  tapTree(c, '·');
+  T = c.renderVals().tray.tree;
+  assert.equal(T.wraps.length, 0);
+  assert.deepEqual(T.leaving.map(l => l.wrap ? 'wrap' : 'box').sort(), ['box', 'wrap'], 'they pop out');
+});
+
+test('tree: a scalar operator cycles −, −…⁻¹, ⁻¹, plain; the − slides up when the ⁻¹ arrives', () => {
+  const c = makeLevel();
+  const G = c.mkSum([{ node: S0(c, '2', '2'), x: 0, y: 0 }, { node: S0(c, '3', '3'), x: 0, y: 0 }]); c.rowArrange(G);
+  c.setState({ tops: [{ node: c.mkProd([G], V0(c)), x: 24, y: c.K.ZT + 110 }] });
+  c.renderVals();
+  tap(c, G.terms[0].node.id);
+  tapTree(c, '+');
+  let T = c.renderVals().tray.tree; const negY = T.wraps.find(w => w.kind === 'neg').y;
+  assert.deepEqual(T.wraps.map(w => w.kind), ['neg']);
+  tapTree(c, '+');
+  T = c.renderVals().tray.tree;
+  assert.deepEqual(T.wraps.map(w => w.kind).sort(), ['inv', 'neg']);
+  assert.ok(T.wraps.find(w => w.kind === 'neg').y < negY, '− moved up');
+  assert.ok(T.wraps.find(w => w.kind === 'inv').y > T.wraps.find(w => w.kind === 'neg').y, '⁻¹ below it');
+  tapTree(c, '+');
+  T = c.renderVals().tray.tree;
+  assert.deepEqual(T.wraps.map(w => w.kind), ['inv']);
+  assert.ok(Math.abs(T.wraps[0].y - negY) < 1, '⁻¹ slid to the middle');
+  assert.ok(T.boxes[0].inv && !T.boxes[0].neg, 'an outline, not night');
+  tapTree(c, '+');
+  assert.equal(c.renderVals().tray.tree.wraps.length, 0);
+});
+
+test('tree: drag a negated group out onto a 0: it lands as −(0𝑣), its inverse beside it', () => {
+  const c = makeLevel();
+  dragPiece(c, 'PZ', ...centre(c, c.state.tops[0].node.vec.id));  // 0𝑣 + 0
+  tap(c, c.state.tops[0].node.vec.id);
+  tapTree(c, '·');                                                // −(0𝑣) in the tree
+  const z = c.state.tops.find(t => t.node.key === 'zero').node;
+  const hover = dragTree(c, 'neg', ...centre(c, z.id));
+  assert.equal(hover.id, z.id);
+  assert.deepEqual(readout(c), ['0𝑣 − (0𝑣) + 0𝑣']);
 });
 
 test('a tray tile dropped on a 0 of its type splits it: 0·𝑣 with 2 → (2 + −2)𝑣, sliding out from the drop', () => {
@@ -597,7 +660,7 @@ test('splitting a vector 0 in the expression: … + 0 → … + 𝑣 + −𝑣',
   dragPiece(c, 'PZ', ...centre(c, c.state.tops[0].node.vec.id)); // 0𝑣 + 0
   tap(c, c.state.tops[0].node.vec.id);
   const z = c.state.tops.find(t => t.node.key === 'zero').node;
-  dragItem(c, '𝑣', ...centre(c, z.id));
+  dragTree(c, '𝑣', ...centre(c, z.id));
   assert.deepEqual(readout(c), ['0𝑣 + 𝑣 + −𝑣']);
 });
 
@@ -626,8 +689,9 @@ test('the live proof: the board is sent as Lean trees, one finished move at a ti
   c.noteBoard();
   assert.equal(calls.length, 2, 'nothing new, nothing sent');
   tap(c, c.state.tops[0].node.vec.id);
+  tapTree(c, '𝑣');
   const z = c.state.tops.find(t => t.node.key === 'zero').node;
-  dragItem(c, '−𝑣', ...centre(c, z.id));
+  dragTree(c, '−𝑣', ...centre(c, z.id));
   c.noteBoard();
   assert.deepEqual(calls[2][2], { add: [{ smul: [{ n: 0 }, { v: 'v' }] }, { neg: { v: 'v' } }, { v: 'v' }] });
   assert.deepEqual(calls[2][3], ['add_neg_cancel']);
@@ -645,4 +709,98 @@ test('the Lean tab shows the live proof: steps, goal, and No goals at the end', 
   assert.equal(L.live.done, true);
   c.setState({ leanStatus: { state: 'asleep' } });
   assert.match(c.renderVals().tray.lean.status, /Press Play/);
+});
+
+// clusters with neg / inv, built directly (the tree view makes them in the game)
+const V0 = c => c.mkV('𝑉', '𝑣', 'v', 'R', 140);
+const S0 = (c, el, val) => c.mkS('R', el, val);
+const negOf0v = c => Object.assign(c.mkProd([S0(c, '0', '0')], V0(c)), { neg: true });
+
+test('a negative cluster: night box, − instead of + on its left, a leading − when first, and −(…) in the readout', () => {
+  const c = makeLevel();
+  const Y = c.K.ZT + 110;
+  c.setState({ tops: [{ node: c.mkProd([S0(c, '0', '0')], V0(c)), x: 24, y: Y }, { node: negOf0v(c), x: 300, y: Y }] });
+  let v = c.renderVals();
+  assert.deepEqual(readout(c), ['0𝑣 − (0𝑣)']);
+  assert.equal(v.boxes.length, 1); assert.equal(v.boxes[0].neg, true);
+  assert.ok(v.pluses.some(p => p.op === 1 && p.sym === '−'), 'the sign between them is −');
+  c.setState({ tops: [{ node: negOf0v(c), x: 60, y: Y }] });
+  v = c.renderVals();
+  assert.deepEqual(readout(c), ['−(0𝑣)']);
+  assert.ok(v.pluses.some(p => p.sym === '−' && p.pe === 'none'), 'a leading −');
+  assert.deepEqual(c.leanTree(c.state.tops[0].node), { neg: { smul: [{ n: 0 }, { v: 'v' }] } });
+  assert.equal(c.zoneValue, '= 0');
+});
+
+test('additive inverses cancel to 0: drag −(0𝑣) onto a tile of the matching 0𝑣', () => {
+  const c = makeLevel();
+  const Y = c.K.ZT + 110;
+  const T = c.mkProd([S0(c, '0', '0')], V0(c)); const N = negOf0v(c);
+  c.setState({ tops: [{ node: T, x: 24, y: Y }, { node: N, x: 300, y: Y }] });
+  c.renderVals();
+  const p = c.P.get(N.id); const [tx, ty] = centre(c, T.vec.id);
+  c.begin(N.vec.id, 'self', ev(0, 0));                      // grabbing its 𝑣 moves the whole cluster
+  c.move(ev((tx - p.x - p.w / 2) / 2, (ty - p.y - p.h / 2) / 2)); c.renderVals();
+  c.move(ev(tx - p.x - p.w / 2, ty - p.y - p.h / 2));
+  assert.equal(c.state.zeroHover && c.state.zeroHover.id, T.id, 'the twin glows');
+  assert.ok(c.state.zeroHover.glow.includes(T.factors[0].id));
+  c.end();
+  assert.deepEqual(readout(c), ['0']);
+  assert.equal(c.state.tops[0].node.key, 'zero', 'a 0 in 𝑉');
+  assert.equal(c.renderVals().won, true, 'and that is the goal');
+});
+
+test('a mismatched cluster does not cancel (no reordering is assumed)', () => {
+  const c = makeLevel();
+  const Y = c.K.ZT + 110;
+  const T = c.mkProd([S0(c, '2', '2')], V0(c)); const N = Object.assign(c.mkProd([S0(c, '3', '3')], V0(c)), { neg: true });
+  c.setState({ tops: [{ node: T, x: 24, y: Y }, { node: N, x: 300, y: Y }] });
+  c.renderVals(); const p = c.P.get(N.id); const [tx, ty] = centre(c, T.vec.id);
+  c.begin(N.vec.id, 'self', ev(0, 0)); c.move(ev(tx - p.x - p.w / 2, ty - p.y - p.h / 2));
+  assert.equal(c.state.zeroHover, null);
+  c.end();
+});
+
+test('multiplicative inverses cancel to 1 in a product: (2·3)⁻¹ onto the 2 of 2·3', () => {
+  const c = makeLevel();
+  const inv = Object.assign(c.mkProd([S0(c, '2', '2'), S0(c, '3', '3')], null), { inv: true });
+  const P = c.mkProd([S0(c, '2', '2'), S0(c, '3', '3'), inv], V0(c));
+  c.setState({ tops: [{ node: P, x: 24, y: c.K.ZT + 110 }] });
+  let v = c.renderVals();
+  assert.deepEqual(readout(c), ['2·3·(2·3)⁻¹𝑣']);
+  assert.ok(v.boxes.some(b => b.inv), 'an outlined box with ⁻¹');
+  const two = P.factors[0];
+  dragTo(c, inv.id, ...centre(c, two.id), 'bit');
+  assert.deepEqual(readout(c), ['1𝑣']);
+});
+
+test('a 1 in a product is absorbed by another tile of it; the tray 1 makes x·1 or 1·𝑣, taking the field', () => {
+  const c = makeLevel();
+  const T = c.state.tops[0].node;                          // 0·𝑣
+  dragPiece(c, 'PO', ...centre(c, T.vec.id));
+  assert.deepEqual(readout(c), ['0·1𝑣']);
+  const one = c.state.tops[0].node.factors[1];
+  assert.equal(one.field, 'R');
+  dragPiece(c, 'PO', ...centre(c, c.state.tops[0].node.factors[0].id));
+  assert.deepEqual(readout(c), ['0·1·1𝑣']);
+  dragTo(c, one.id, ...centre(c, c.state.tops[0].node.factors[0].id));
+  assert.deepEqual(readout(c), ['0·1𝑣']);
+});
+
+test('tray pieces are untyped (recessed bands) until they land', () => {
+  const c = makeLevel();
+  c.setState({ trayOpen: true });
+  const v = c.renderVals();
+  assert.equal(v.tray.tiles.hex.type, '𝐅'); assert.equal(v.tray.tiles.hex.band, '#C38F2A');
+  assert.equal(v.tray.tiles.vec.vband, '#1F3F9A');
+  assert.equal(v.tray.tiles.one.el, '1'); assert.equal(v.tray.tiles.one.type, '𝐅');
+});
+
+test('1 splits into x·x⁻¹ from the tree; refused for 0', () => {
+  const c = makeLevel();
+  dragPiece(c, 'PO', ...centre(c, c.state.tops[0].node.vec.id));   // 0·1·𝑣
+  const one = c.state.tops[0].node.factors[1];
+  c.state.trayItems = [{ id: 'T1', node: S0(c, '2', '2') }, { id: 'T2', node: S0(c, '0', '0') }];
+  dragItem(c, '2', ...centre(c, one.id));
+  assert.deepEqual(readout(c), ['0·2·(2)⁻¹𝑣']);
 });

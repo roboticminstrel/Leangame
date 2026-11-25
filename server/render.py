@@ -10,6 +10,7 @@ Expression trees (JSON):
     {"v": "v"}            a vector variable          -> v
     {"zero": true}        the zero vector            -> (0 : V)
     {"neg": e}            additive inverse           -> (-e)
+    {"inv": e}            multiplicative inverse (scalars) -> (e)⁻¹
     {"add": [e1, e2, ...]} a sum (same sort), nested to the left: ((e1 + e2) + e3)
     {"mul": [e1, e2, ...]} a product of scalars, nested to the left
     {"smul": [s, w]}      a scalar times a vector    -> (s • w)
@@ -57,7 +58,7 @@ ARITH = "arith"
 
 OCCURRENCES = 3  # try a lemma at its 1st, 2nd and 3rd match
 
-BINDERS = ("{F V : Type} [Field F] [Add V] [Zero V] [Neg V] [SMul F V] [Axler.AddLaws V] "
+BINDERS = ("{F V : Type} [Field F] [CharZero F] [Add V] [Zero V] [Neg V] [SMul F V] [Axler.AddLaws V] "
            "[Axler.VectorSpace F V]")
 HEADER = "example " + BINDERS
 AUTO = "auto"  # any rule in RULES (the board's hint, if it sends one, is tried first)
@@ -98,6 +99,10 @@ class _Walk:
             return "V"
         if k == "neg":
             return self.sort(x, depth + 1)
+        if k == "inv":
+            if self.sort(x, depth + 1) != "F":
+                raise BadInput("only scalars have multiplicative inverses")
+            return "F"
         if k in ("add", "mul"):
             if not isinstance(x, list) or len(x) < 2:
                 raise BadInput(f"{k} takes a list of at least two terms")
@@ -128,6 +133,9 @@ def term(e):
         return "(0 : V)"
     if k == "neg":
         return f"(-{term(x)})"
+    if k == "inv":
+        t = term(x)
+        return f"({t}⁻¹)" if t.startswith("(") else f"(({t})⁻¹)"
     if k in ("add", "mul"):
         op = " + " if k == "add" else " * "
         out = term(x[0])

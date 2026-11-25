@@ -6,3 +6,5 @@ import Leangame.Mathlib
 -- tactics the referee (server/referee.py) uses to check board moves
 import Mathlib.Tactic.NormNum.Basic
 import Mathlib.Tactic.NthRewrite
+import Mathlib.Tactic.NormNum.Inv
+import Mathlib.Algebra.CharZero.Defs

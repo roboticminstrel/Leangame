@@ -45,8 +45,9 @@ export class Range extends Component {
         goal: this.mkV('𝑉', '0', 'zero', 'R', 110),
         tops: tops,
         pieces: [
-          { id: 'PZS', kind: 'zeroS', field: 'R', x: 30, y: 600, hx: 30, hy: 600 },
-          { id: 'PZ', kind: 'zero', x: 150, y: 600, hx: 150, hy: 600 }
+          { id: 'PZS', kind: 'zeroS', x: 30, y: 600, hx: 30, hy: 600 },
+          { id: 'PZ', kind: 'zero', x: 150, y: 600, hx: 150, hy: 600 },
+          { id: 'PO', kind: 'one', x: 280, y: 600, hx: 280, hy: 600 }
         ]
       });
     }
@@ -81,25 +82,32 @@ export class Range extends Component {
       if (!/^[a-z]$/.test(n.key || '')) return null;
       return n.neg ? { neg: { v: n.key } } : { v: n.key };
     }
+    let core;
     if (n.t === 'prod') {
-      const fs = n.factors.map(f => this.leanTree(f)); if (fs.some(x => !x)) return null;
+      const o = this._orderOverride;
+      const facs = o && o.key === n.id ? this.readingOrder(n.factors, n.id) : n.factors;
+      const fs = facs.map(f => this.leanTree(f)); if (fs.some(x => !x)) return null;
       const sc = fs.length === 1 ? fs[0] : fs.length ? { mul: fs } : null;
-      if (!n.vec) return sc;
-      const v = this.leanTree(n.vec); if (!v) return null;
-      return sc ? { smul: [sc, v] } : v;
-    }
-    return this.leanSum(n.terms.map(t => t.node));
+      if (!n.vec) core = sc;
+      else { const v = this.leanTree(n.vec); if (!v) return null; core = sc ? { smul: [sc, v] } : v; }
+    } else core = this.leanSum(n.terms.map(t => t.node), n.id);
+    if (!core) return null;
+    if (n.inv) core = { inv: core };
+    if (n.neg) core = { neg: core };
+    return core;
   }
-  leanSum(nodes) {
-    const ts = this.readingOrder(nodes).map(x => this.leanTree(x));
+  leanSum(nodes, key) {
+    const ts = this.readingOrder(nodes, key).map(x => this.leanTree(x));
     if (!ts.length || ts.some(x => !x)) return null;
     return ts.length === 1 ? ts[0] : { add: ts };
   }
-  readingOrder(ns) {
+  readingOrder(ns, key) {
+    const o = this._orderOverride;
+    if (o && key != null && o.key === key) return ns.slice().sort((a, b) => o.ids.indexOf(a.id) - o.ids.indexOf(b.id));
     const pos = n => this.P.get(n.id) || { x: 0, y: 0 };
     return ns.slice().sort((a, b) => Math.abs(pos(a).y - pos(b).y) > 60 ? pos(a).y - pos(b).y : pos(a).x - pos(b).x);
   }
-  zoneTree() { return this.leanSum(this.state.tops.filter(t => this.zoneIds.indexOf(t.node.id) >= 0).map(t => t.node)); }
+  zoneTree() { return this.leanSum(this.state.tops.filter(t => this.zoneIds.indexOf(t.node.id) >= 0).map(t => t.node), 'zone'); }
   // After each finished move (nothing being dragged), if the expression changed, tell the live proof
   noteBoard() {
     const L = this.props.lean; if (!L || this.props.legacy || !this.zoneIds) return;
@@ -107,7 +115,10 @@ export class Range extends Component {
     const t = this.zoneTree(); const key = JSON.stringify(t);
     if (key === this._leanKey) { this._hint = null; return; }
     const from = this._leanTree; this._leanKey = key; this._leanTree = t;
-    L.boardChanged(from, t, this._hint || null);
+    // a cancellation goes to Lean in two steps: first the terms rearranged so the pair sits together, then the law
+    const mid = this._leanMid; this._leanMid = null;
+    if (mid && JSON.stringify(mid) !== JSON.stringify(from)) { L.boardChanged(from, mid, null); L.boardChanged(mid, t, this._hint || null); }
+    else L.boardChanged(from, t, this._hint || null);
     this._hint = null;
   }
   componentDidUpdate() { this.noteBoard(); }
@@ -182,12 +193,17 @@ export class Range extends Component {
     if (loc.kind === 'term') return loc.parent.terms[loc.idx];
     return null;
   }
+  // A cluster (product or sum) can carry neg (its additive inverse, −(…)) and, for scalars, inv (its multiplicative
+  // inverse, (…)⁻¹). A flagged cluster keeps its shape: it's never flattened into its parent or collapsed.
+  flagged(n) { return !!(n && (n.t === 'prod' || n.t === 'sum') && (n.neg || n.inv)); }
+  negCluster(n) { return !!(n && (n.t === 'prod' || n.t === 'sum') && n.neg); }
   normalize(n) {
     if (!n) return null;
     if (n.t === 'prod') {
       let fs = [];
-      n.factors.forEach(f => { const g = this.normalize(f); if (!g) return; if (g.t === 'prod' && !g.vec) fs = fs.concat(g.factors); else fs.push(g); });
+      n.factors.forEach(f => { const g = this.normalize(f); if (!g) return; if (g.t === 'prod' && !g.vec && !this.flagged(g)) fs = fs.concat(g.factors); else fs.push(g); });
       n.factors = fs; n.vec = this.normalize(n.vec);
+      if (this.flagged(n)) return fs.length || n.vec ? n : null;
       if (!fs.length) return n.vec;
       if (fs.length === 1 && !n.vec) return fs[0];
       return n;
@@ -196,7 +212,7 @@ export class Range extends Component {
       const out = []; let flat = false;
       n.terms.forEach(t => {
         const c = this.normalize(t.node); if (!c) return;
-        if (c.t === 'sum') { flat = true; c.terms.forEach(it => out.push({ node: it.node, x: t.x + it.x, y: t.y + it.y })); }
+        if (c.t === 'sum' && !this.flagged(c)) { flat = true; c.terms.forEach(it => out.push({ node: it.node, x: t.x + it.x, y: t.y + it.y })); }
         else out.push(Object.assign({}, t, { node: c }));
       });
       n.terms = out;
@@ -227,7 +243,7 @@ export class Range extends Component {
     if (out.filter(inZone).length > 1 || (this.state && this.state.rules)) {
       const res = [];
       out.forEach(t => {
-        if (t.node.t === 'sum' && t.node.terms.length >= 2 && inZone(t)) {
+        if (t.node.t === 'sum' && t.node.terms.length >= 2 && inZone(t) && !this.flagged(t.node)) {
           const m = this.measure(t.node); const bb = m.bb;
           const ox = t.x + m.padL + 26 + this.K.SPAD - bb.minX, oy = t.y + (m.h - bb.h) / 2 - bb.minY;
           t.node.terms.forEach(it => res.push({ node: it.node, x: ox + it.x, y: oy + it.y }));
@@ -271,6 +287,13 @@ export class Range extends Component {
   mulC(a, b) { return [a[0] * b[0] - a[1] * b[1], a[0] * b[1] + a[1] * b[0]]; }
   addC(a, b) { return [a[0] + b[0], a[1] + b[1]]; }
   evalN(n) {
+    if (this.flagged(n)) {
+      let e = this.evalN(Object.assign({}, n, { neg: false, inv: false }));
+      if (!e) return null;
+      if (n.inv) { if (e.k !== 's') return null; const d = e.c[0] * e.c[0] + e.c[1] * e.c[1]; if (d < 1e-18) return null; e = { k: 's', c: [e.c[0] / d, -e.c[1] / d] }; }
+      if (n.neg) e = e.k === 's' ? { k: 's', c: [-e.c[0], -e.c[1]] } : this.scaleV(e, [-1, 0]);
+      return e;
+    }
     if (n.t === 's') return { k: 's', c: this.cval(n.val) };
     if (n.t === 'v' && n.key === 'zero') return { k: 'v', coords: null, coef: {}, zero: true };
     if (n.t === 'v' && n.neg) return this.scaleV(this.evalN(Object.assign({}, n, { neg: false })), [-1, 0]);
@@ -359,6 +382,7 @@ export class Range extends Component {
       const padL = this.sumPadL(n);
       m = { w: padL + 26 + K.SPAD + bb.w + K.SPAD + 26 + 8, h: h, bb: bb, padL: padL };
     }
+    if (this.flagged(n)) m = { w: m.w + 24 + (n.inv ? 26 : 0), h: m.h + 20, inner: m, pad: { x: 12, y: 10 } };
     this.M.set(n.id, m);
     return m;
   }
@@ -395,34 +419,52 @@ export class Range extends Component {
     const mx = mid(ax, bx), my = mid(ay, by);
     return { x: mx[0], y: my[0], d: Math.hypot(mx[1], my[1]) };
   }
-  plusesFor(items, z, gid, out) {
+  plusesFor(items, z, gid, out, nodes) {
     const pts = items.map(p => ({ x: p.x + p.w / 2, y: p.y + p.h / 2 }));
     const path = this.bestPath(pts, items);
     const on = new Set();
     for (let i = 1; i < path.length; i++) { const a = Math.min(path[i - 1], path[i]), b = Math.max(path[i - 1], path[i]); on.add(a + '-' + b); }
+    const neg = i => !!(nodes && this.negCluster(nodes[i]));
     for (let i = 0; i < pts.length; i++) for (let j = i + 1; j < pts.length; j++) {
       const lit = on.has(i + '-' + j);
       const gm = this.gapMid(items[i], items[j]);
-      out.push({ x: gm.x - 19, y: gm.y - 19, z: z, op: lit ? 1 : 0, pe: lit ? 'auto' : 'none', tap: this.tapPlus(gid) });
+      const right = pts[i].x > pts[j].x ? i : j;
+      out.push({ x: gm.x - 19, y: gm.y - 19, z: z, op: lit ? 1 : 0, pe: lit ? 'auto' : 'none', tap: this.tapPlus(gid), sym: neg(right) ? '−' : '+' });
+    }
+    if (pts.length) {
+      let first = 0; pts.forEach((p, i) => { if (p.x < pts[first].x) first = i; });
+      if (neg(first)) out.push({ x: items[first].x - 46, y: pts[first].y - 19, z: z, op: 1, pe: 'none', tap: null, sym: '−' });
     }
     return path;
   }
   layout(tops) {
     this.M = new Map(); this.P = new Map();
-    const R = { hexes: [], vecs: [], groups: [], dots: [], pluses: [] };
+    const R = { hexes: [], vecs: [], groups: [], dots: [], pluses: [], boxes: [] };
     this._R = R;
     tops.forEach(t => { this.measure(t.node); this.place(t.node, t.x, t.y, 0, { z: 4 }); });
     const zoneItems = tops.filter(t => { const p = this.P.get(t.node.id); const cy = p.y + p.h / 2; return cy > this.K.ZT && cy < this.K.ZB; });
     this.zoneIds = zoneItems.map(t => t.node.id);
-    this.zonePath = this.plusesFor(zoneItems.map(t => this.P.get(t.node.id)), 3, 'zone', R.pluses);
+    this.zonePath = this.plusesFor(zoneItems.map(t => this.P.get(t.node.id)), 3, 'zone', R.pluses, zoneItems.map(t => t.node));
     return R;
   }
   place(n, x, y, depth, ctx) {
     const ov = this._ov;
-    if (ov && ov.id === n.id) { x = ov.x; y = ov.y; }
+    if (ov && ov.id === n.id && !ctx.unboxed) { x = ov.x; y = ov.y; }
     const m = this.M.get(n.id); const R = this._R; const K = this.K;
     const dragging = this._dset && this._dset.has(n.id);
     const z = (dragging ? 900 : 0) + (ctx.z != null ? ctx.z : depth * 20 + 4);
+    if (m.pad && !ctx.unboxed) {
+      const ty = this.typeOf(n);
+      R.boxes.push({ id: n.id, x: x, y: y, w: m.w, h: m.h, neg: !!n.neg, inv: !!n.inv, night: ty.k === 'v' ? '#182654' : '#3B2C12', z: z - 1,
+        anim: this._glow && this._glow.has(n.id) ? 'rgPulse 1.4s ease-in-out infinite' : 'none', down: this.onDown(n.id, 'bit'),
+        aria: (n.neg ? 'Additive inverse' : 'Multiplicative inverse') + ' of a group. Drag the frame to move it' });
+      this.M.set(n.id, m.inner);
+      this.place(n, x + m.pad.x, y + m.pad.y, depth, Object.assign({}, ctx, { unboxed: true }));
+      const io = (this.P.get(n.id) || {}).io;
+      this.M.set(n.id, m);
+      this.P.set(n.id, { x: x, y: y, w: m.w, h: m.h, depth: depth, io: io });
+      return;
+    }
     this.P.set(n.id, { x: x, y: y, w: m.w, h: m.h, depth: depth });
     if (n.t === 's') {
       const sl = this.slideOf(n.id);
@@ -483,7 +525,7 @@ export class Range extends Component {
       bt: (H - 88) / 2, bgL: padL + 14, scale: dragging ? 1.02 : 1, anim: this._glow && this._glow.has(n.id) ? 'rgPulse 1.4s ease-in-out infinite' : 'none', down: this.onDown(n.id, 'bit'),
       aria: 'Sum space' + (kind === 'f' ? ' in ' + this.fieldSym(ty.f) : kind === 'v' ? ' in ' + ty.sp : '') + '. Drag a bracket to move it' }));
     n.terms.forEach(t => this.place(t.node, ox + t.x, oy + t.y, depth + 1, { z: (depth + 1) * 20 + 4 + (dragging ? 900 : 0) }));
-    this.plusesFor(n.terms.map(t => this.P.get(t.node.id)), gz + 1, n.id, R.pluses);
+    this.plusesFor(n.terms.map(t => this.P.get(t.node.id)), gz + 1, n.id, R.pluses, n.terms.map(t => t.node));
   }
 
   /* ---------- interaction ---------- */
@@ -567,6 +609,7 @@ export class Range extends Component {
         this._lp = setTimeout(() => this.longPress(id), 550);
       }
     }
+    if (d.rules && role !== 'strip' && !d.absorb && !d.zero) this.setupCancel(d, loc);
     d.snap = this.readoutOf(this.state.tops); // the readout keeps showing this until the move is done
     this.drag = d;
   }
@@ -596,13 +639,21 @@ export class Range extends Component {
       if (Math.abs(dx) + Math.abs(dy) < 8) return;
       d.moved = true; clearTimeout(this._lp);
       if (d.mode === 'pending') {
-        if (Math.abs(dy) > Math.abs(dx)) { d.mode = 'move'; d.blockId = d.prodId; this.prepMove(d); } else d.mode = 'reorder';
+        if (Math.abs(dy) > Math.abs(dx)) { d.mode = 'move'; d.blockId = d.prodId; this.prepMove(d); d.cancel = null; d.absorbOne = null; this.setupCancel(d, null); }
+        else d.mode = 'reorder';
       }
       if (d.mode === 'sand') this.detach(d);
       this.setState({ dragIds: this.dragSet(d), holding: null });
     }
-    d.zeroHover = d.zero ? this.zeroTarget(d.gx + dx + d.gw / 2, d.gy + dy + d.gh / 2, d.zero.kind, Object.assign({ exclude: d.id }, d.zero))
-      : d.absorb ? this.absorbTarget(d, d.gx + dx + d.gw / 2, d.gy + dy + d.gh / 2) : null;
+    const pcx = d.gx + dx + d.gw / 2, pcy = d.gy + dy + d.gh / 2;
+    d.zeroHover = d.zero ? this.zeroTarget(pcx, pcy, d.zero.kind, Object.assign({ exclude: d.id }, d.zero))
+      : d.absorb ? this.absorbTarget(d, pcx, pcy)
+      : d.absorbOne ? this.oneAbsorbTarget(d, pcx, pcy)
+      : d.cancel ? this.cancelTarget(d, pcx, pcy) : null;
+    if (d.mode === 'reorder' && d.zeroHover) {
+      this.setState({ override: { id: d.id, x: d.gx + dx, y: d.gy + dy }, preview: null, zeroHover: d.zeroHover });
+      return;
+    }
     const pv = d.rules && !d.zeroHover ? this.findPreview(d, d.gx + dx + d.gw / 2, d.gy + dy + d.gh / 2) : null;
     d.preview = pv;
     if (d.mode === 'reorder' && pv) {
@@ -631,11 +682,11 @@ export class Range extends Component {
     if (!d) return;
     if (!d.moved) {
       this.setState({ holding: null, dragIds: null });
-      if (!this.props.legacy && d.role === 'self') { const n = this.locate(this.state.tops, d.id); if (n && (n.node.t === 's' || n.node.t === 'v')) this.toTray(n.node); }
+      if (!this.props.legacy && d.role === 'self') this.showTree(d.id);
       return;
     }
     if (this.state.zeroHover) this.setState({ zeroHover: null });
-    if (d.zeroHover && (d.absorb ? this.absorbZero(d) : this.dropZero(d))) return;
+    if (d.zeroHover && (d.zeroHover.cancel ? this.applyCancel(d) : d.absorbOne ? this.absorbOne(d) : d.absorb ? this.absorbZero(d) : this.dropZero(d))) return;
     if (d.rules && d.preview) { this.applyPreview(d); return; }
     if (d.mode === 'reorder') { this._hint = ['mul_comm']; this.setState({ override: null, dragIds: null, preview: null }); return; }
     if (d.mode === 'move') { this.setState({ dragIds: null, preview: null }); return; }
@@ -939,7 +990,7 @@ export class Range extends Component {
   pieceDown(pc) {
     return e => {
       if (e && e.preventDefault) e.preventDefault();
-      if (this.state.rules && pc.kind !== 'zero' && pc.kind !== 'zeroS') return;
+      if (this.state.rules && pc.kind !== 'zero' && pc.kind !== 'zeroS' && pc.kind !== 'one') return;
       this.pdrag = { id: pc.id, sx: e.clientX, sy: e.clientY, ox: pc.x, oy: pc.y, moved: false };
     };
   }
@@ -950,6 +1001,7 @@ export class Range extends Component {
     const up = { pieces: this.state.pieces.map(p => p.id === d.id ? Object.assign({}, p, { x: d.ox + w.dx, y: d.oy + w.dy }) : p) };
     if (d.id === 'PZ') up.zeroHover = this.zeroTarget(d.ox + w.dx + this.K.ZW / 2, d.oy + w.dy + 44, 'v');
     if (d.id === 'PZS') up.zeroHover = this.zeroTarget(d.ox + w.dx + 48, d.oy + w.dy + 44, 's', { f: this.state.pieces.find(p => p.id === 'PZS').field });
+    if (d.id === 'PO') up.zeroHover = this.oneDropTarget(d.ox + w.dx + 48, d.oy + w.dy + 44);
     this.setState(up);
   }
   // What a dragged 0 is over: a tile of its kind ('v' vectors, 's' scalars), or the right bracket of a sum of that
@@ -976,6 +1028,116 @@ export class Range extends Component {
     if (opts.f && ty.f && ty.f !== opts.f) return null;
     if (opts.sp && ty.sp !== opts.sp) return null;
     return { id: n.id, sp: ty.sp, f: ty.f, kind: n.t, glow: this.ids(n) };
+  }
+  // Inverses. Dragging a term onto its additive twin in the same sum (x and −x), or a factor onto its multiplicative
+  // twin in the same product (x and x⁻¹), turns the pair into 0 or 1. Either side can be a cluster: the pointer can be
+  // over any tile of the matching run (direct match, no reordering: the player lines things up first).
+  inverseAdd(n) {
+    if (n.t === 's' || n.t === 'v') return this.negOf(n);
+    const c = this.cloneFresh(n); c.neg = !c.neg; if (!c.neg) delete c.neg; return c;
+  }
+  inverseMul(n) {
+    if (this.typeOf(n).k !== 's') return null;
+    if (n.t === 's') { const c = this.mkProd([this.cloneFresh(n)], null); c.inv = true; return c; }
+    const c = this.cloneFresh(n); c.inv = !c.inv; if (!c.inv) delete c.inv; return c;
+  }
+  // the run a cluster stands for inside a flattened chain: a sum's terms, a product's factors, or just itself
+  runOf(x, kind) {
+    if (kind === 'add' && x.t === 'sum' && !this.flagged(x)) return x.terms.map(t => t.node);
+    if (kind === 'mul' && x.t === 'prod' && !this.flagged(x) && !x.vec) return x.factors;
+    return [x];
+  }
+  setupCancel(d, loc) {
+    if (d.mode === 'move') {
+      const A = this.locate(d.tops, d.blockId); if (!A) return;
+      let members, key;
+      if (A.kind === 'term') { members = A.parent.terms.map(t => t.node); key = A.parent.id; }
+      else if (A.kind === 'top' && this.zoneIds.indexOf(A.node.id) >= 0) { members = d.tops.filter(t => this.zoneIds.indexOf(t.node.id) >= 0).map(t => t.node); key = 'zone'; }
+      else return;
+      const X = this.inverseAdd(A.node); if (!X) return;
+      d.cancel = { kind: 'add', key: key, aId: A.node.id, chainIds: this.readingOrder(members, key).map(m => m.id), X: X };
+    } else if (loc && loc.kind === 'factor') {
+      const F = loc.node, P = loc.parent;
+      if (F.t === 's' && F.val === '1') { d.absorbOne = { prodId: P.id, chainIds: P.factors.filter(f => f.id !== F.id).map(f => f.id).concat(P.vec ? [P.vec.id] : []) }; return; }
+      const X = this.inverseMul(F); if (!X) return;
+      d.cancel = { kind: 'mul', key: P.id, aId: F.id, chainIds: P.factors.map(f => f.id), X: X };
+    }
+  }
+  cancelTarget(d, cx, cy) {
+    const L = d.cancel;
+    const chain = L.chainIds.map(id => this.locate(d.orig, id)).filter(Boolean).map(l => l.node);
+    let hit = -1;
+    chain.forEach((m, i) => { if (m.id !== L.aId && this.inRect(this.P.get(m.id), cx, cy, -6)) hit = i; });
+    if (hit < 0) return null;
+    const run = this.runOf(L.X, L.kind); const k = run.length;
+    for (let w = Math.max(0, hit - k + 1); w <= hit && w + k <= chain.length; w++) {
+      const win = chain.slice(w, w + k);
+      if (win.some(m => m.id === L.aId)) continue;
+      if (!win.every((m, i) => this.canon(m) === this.canon(run[i]))) continue;
+      if (L.kind === 'mul') { const e = this.evalN(this.mkProd(win.map(m => this.clone(m)), null)); if (!e || Math.hypot(e.c[0], e.c[1]) < 1e-12) continue; } // 0 has no inverse
+      const glow = [].concat(...win.map(m => this.ids(m)));
+      return { id: win[0].id, glow: glow, cancel: { ids: win.map(m => m.id) } };
+    }
+    return null;
+  }
+  applyCancel(d) {
+    const L = d.cancel; const ids = d.zeroHover.cancel.ids;
+    const tops = this.clone(d.orig);
+    const A = this.locate(tops, L.aId); if (!A) return false;
+    const ty = this.typeOf(A.node); const name = this.label(A.node);
+    // for Lean: the same terms with A moved right after its twin (then the law applies to neighbours)
+    const order = L.chainIds.filter(id => id !== L.aId); order.splice(order.indexOf(ids[ids.length - 1]) + 1, 0, L.aId);
+    this._orderOverride = { key: L.key, ids: order }; this._leanMid = this.zoneTree(); this._orderOverride = null;
+    const res = L.kind === 'add' ? (ty.k === 'v' ? this.mkV(ty.sp, '0', 'zero', ty.f || null, this.K.ZW) : this.mkS(ty.f, '0', '0')) : this.mkS(ty.f, '1', '1');
+    this.setRef(tops, this.locate(tops, ids[0]), res);
+    ids.slice(1).concat([L.aId]).forEach(id => { const l = this.locate(tops, id); if (l) this.setRef(tops, l, null); });
+    this._hint = L.kind === 'add' ? ['add_neg_cancel'] : ['arith'];
+    this.setState({ tops: this.normTops(tops), dragIds: null, preview: null, override: null });
+    this.flash(this.P.get(ids[0]), L.kind === 'add' ? 'additive inverses · they make 0' : name + ' and its inverse make 1', 'ok');
+    return true;
+  }
+  // a 1 in a product, over another tile of the same product: 1·x = x
+  oneAbsorbTarget(d, cx, cy) {
+    for (const id of d.absorbOne.chainIds) {
+      const l = this.locate(d.orig, id);
+      if (l && this.inRect(this.P.get(id), cx, cy, -6)) return { id: id, glow: this.ids(l.node), one: true };
+    }
+    return null;
+  }
+  absorbOne(d) {
+    const tops = this.clone(d.orig);
+    const l = this.locate(tops, d.id); if (!l) return false;
+    const at = this.P.get(d.zeroHover.id); const tl = this.locate(tops, d.zeroHover.id); const name = tl ? this.label(tl.node) : 'x';
+    this.setRef(tops, l, null);
+    this._hint = ['mul_one', 'one_smul'];
+    this.setState({ tops: this.normTops(tops), dragIds: null, preview: null, override: null });
+    this.flash(at, '1·' + name + ' = ' + name + ' · multiplicative identity', 'ok');
+    return true;
+  }
+  // the tray's 1, dropped on a tile: a scalar x becomes x·1, a vector 𝑣 becomes 1·𝑣 (the 1 takes their field)
+  oneDropTarget(cx, cy) {
+    let best = null;
+    this.state.tops.forEach(t => this.walk(t.node, n => {
+      if (n.t !== 's' && n.t !== 'v') return;
+      const p = this.P.get(n.id);
+      if (this.inRect(p, cx, cy, 6) && (!best || p.depth >= best.depth)) best = { id: n.id, depth: p.depth, glow: [n.id], f: this.typeOf(n).f };
+    }, null, null));
+    return best;
+  }
+  addOne(tops, id) {
+    const loc = this.locate(tops, id); if (!loc) return null;
+    const X = loc.node; const one = this.mkS(this.typeOf(X).f || 'R', '1', '1');
+    if (X.t === 's') { if (loc.kind === 'factor') loc.parent.factors.splice(loc.idx + 1, 0, one); else this.setRef(tops, loc, this.mkProd([X, one], null)); }
+    else { if (loc.kind === 'vec') loc.parent.factors.push(one); else this.setRef(tops, loc, this.mkProd([one], X)); }
+    return one;
+  }
+  // a scalar dragged from the tree onto a 1: 1 = x·x⁻¹ (not for x = 0)
+  splitOne(tops, oneId, item) {
+    const loc = this.locate(tops, oneId); if (!loc) return null;
+    const a = this.cloneFresh(item); const b = this.inverseMul(item); if (!b) return null;
+    const e = this.evalN(a); if (!e || e.k !== 's' || Math.hypot(e.c[0], e.c[1]) < 1e-12) return { bad: '0 has no multiplicative inverse' };
+    if (loc.kind === 'factor') loc.parent.factors.splice(loc.idx, 1, a, b); else this.setRef(tops, loc, this.mkProd([a, b], null));
+    return { a: a, b: b };
   }
   // The term of the 0's own sum under the pointer, if any (the whole term glows)
   absorbTarget(d, cx, cy) {
@@ -1028,15 +1190,30 @@ export class Range extends Component {
   // The same, as tokens {t, id}: each piece of text knows the node it came from (brackets, + and · belong to their
   // sum or product), so the readout can light up the part of the expression being moved.
   exprTokens(nodes, top) {
-    const order = ns => this.readingOrder(ns);
     const join = (lists, sep, id) => lists.reduce((out, l, i) => out.concat(i ? [{ t: sep, id: id }] : [], l), []);
+    // a sum: terms in reading order, + between them, − before a negative cluster (its own − then goes)
+    const chain = (ns, id, key) => {
+      const out = [];
+      this.readingOrder(ns, key).forEach((x, i) => {
+        let tk = one(x);
+        if (i > 0) {
+          if (this.negCluster(x)) { tk = tk.slice(); tk[0] = Object.assign({}, tk[0], { t: tk[0].t.replace(/^−/, '') }); if (!tk[0].t) tk.shift(); out.push({ t: ' − ', id: x.id }); }
+          else out.push({ t: ' + ', id: id });
+        }
+        out.push(...tk);
+      });
+      return out;
+    };
     const one = n => {
       if (n.t === 's' || n.t === 'v') return [{ t: this.elText(n), id: n.id }];
-      if (n.t === 'sum') return [{ t: '(', id: n.id }].concat(join(order(n.terms.map(t => t.node)).map(one), ' + ', n.id), [{ t: ')', id: n.id }]);
-      const fs = join(n.factors.map(one), '·', n.id);
-      return n.vec ? fs.concat(one(n.vec)) : fs;
+      let core;
+      if (n.t === 'sum') core = [{ t: '(', id: n.id }].concat(chain(n.terms.map(t => t.node), n.id, n.id), [{ t: ')', id: n.id }]);
+      else { const fs = join(n.factors.map(one), '·', n.id); core = n.vec ? fs.concat(one(n.vec)) : fs; }
+      if (!this.flagged(n)) return core;
+      if (n.t === 'prod') core = [{ t: '(', id: n.id }].concat(core, [{ t: ')', id: n.id }]);
+      return (n.neg ? [{ t: '−', id: n.id }] : []).concat(core, n.inv ? [{ t: '⁻¹', id: n.id }] : []);
     };
-    const parts = join(order(nodes).map(one), ' + ', null);
+    const parts = chain(nodes, null, 'zone');
     return top ? parts : [{ t: '(', id: null }].concat(parts, [{ t: ')', id: null }]);
   }
   // The readout of the expression as it stands: its tokens, whether its terms can be added, and its value
@@ -1070,8 +1247,9 @@ export class Range extends Component {
   canon(n) {
     if (n.t === 's') return 's:' + n.val;
     if (n.t === 'v') return 'v:' + n.type + ':' + (n.neg ? '-' : '') + n.el;
-    if (n.t === 'prod') return 'p(' + n.factors.map(f => this.canon(f)).join('*') + '|' + (n.vec ? this.canon(n.vec) : '') + ')';
-    return 'g(' + n.terms.map(t => this.canon(t.node)).sort().join('+') + ')';
+    const core = n.t === 'prod' ? 'p(' + n.factors.map(f => this.canon(f)).join('*') + '|' + (n.vec ? this.canon(n.vec) : '') + ')'
+      : 'g(' + n.terms.map(t => this.canon(t.node)).sort().join('+') + ')';
+    return (n.neg ? '-' : '') + core + (n.inv ? '^-1' : '');
   }
   // Tap: the tile and its inverse join the tray (once each), which opens; new ones pop in
   toTray(n) {
@@ -1086,14 +1264,18 @@ export class Range extends Component {
   }
   // A tray item over a 0 of its own type in play (a scalar over a 0 in its field, a vector over a 0 in its space)
   splitTarget(item, cx, cy) {
+    const it = this.typeOf(item);
     let best = null;
     this.state.tops.forEach(t => this.walk(t.node, n => {
       const isZero = (n.t === 's' && n.val === '0') || (n.t === 'v' && n.key === 'zero');
-      if (!isZero || n.t !== item.t) return;
-      if (n.t === 's' && n.field && item.field && n.field !== item.field) return;
-      if (n.t === 'v' && n.type !== item.type) return;
+      const isOne = n.t === 's' && n.val === '1' && it.k === 's';
+      if (!isZero && !isOne) return;
+      const nt = this.typeOf(n);
+      if (nt.k !== it.k) return;
+      if (nt.k === 's' && nt.f && it.f && nt.f !== it.f) return;
+      if (nt.k === 'v' && nt.sp !== it.sp) return;
       const p = this.P.get(n.id);
-      if (this.inRect(p, cx, cy, 6) && (!best || p.depth >= best.depth)) best = { id: n.id, depth: p.depth, glow: [n.id] };
+      if (this.inRect(p, cx, cy, 6) && (!best || p.depth >= best.depth)) best = { id: n.id, depth: p.depth, glow: [n.id], one: isOne };
     }, null, null));
     return best;
   }
@@ -1101,7 +1283,7 @@ export class Range extends Component {
   // same sum; a 0 that isn't a term of a sum (a scalar docked on a vector, say) becomes the bracket (x + −x).
   splitZero(tops, zeroId, item) {
     const loc = this.locate(tops, zeroId); if (!loc) return null;
-    const Z = loc.node; const a = this.cloneFresh(item); const b = this.negOf(item); if (!b) return null;
+    const Z = loc.node; const a = this.cloneFresh(item); const b = this.inverseAdd(item); if (!b) return null;
     const K = this.K; const ma = this.measure(a), mb = this.measure(b), mz = this.measure(Z);
     const two = (list, t, inSame) => {
       const grow = ma.w + K.GAP + mb.w - mz.w;
@@ -1122,28 +1304,31 @@ export class Range extends Component {
     if (!d.moved && Math.abs(w.dx) + Math.abs(w.dy) < 8) return;
     d.moved = true; d.x = d.ox + w.dx; d.y = d.oy + w.dy;
     const m = this.measure(d.node);
-    this.setState({ zeroHover: this.splitTarget(d.node, d.x + m.w / 2, d.y + 44), idragAt: { x: d.x, y: d.y } });
+    this.setState({ zeroHover: this.splitTarget(d.node, d.x + m.w / 2, d.y + m.h / 2), idragAt: { x: d.x, y: d.y } });
   }
   iend() {
     const d = this.idrag; this.idrag = null;
+    if (!d.moved && d.tap) { d.tap(); return; }
     const hit = d.moved ? this.state.zeroHover : null;
     this.setState({ zeroHover: null, idragAt: null });
     if (!d.moved) { this.flash({ x: 40, y: this.K.ZT }, 'Drag it onto a 0 of the same type to split the 0 into it and its inverse', 'info'); return; }
     if (!hit) return;
     const tops = this.clone(this.state.tops);
     const at = this.P.get(hit.id);
-    const r = this.splitZero(tops, hit.id, d.node); if (!r) return;
+    const r = hit.one ? this.splitOne(tops, hit.id, d.node) : this.splitZero(tops, hit.id, d.node); if (!r) return;
+    if (r.bad) { this.flash(at, r.bad, 'bad'); return; }
     const slides = {}; slides[r.a.id] = { x: d.x, y: d.y, top: true }; slides[r.b.id] = { x: d.x, y: d.y };
-    this._hint = ['add_neg_cancel'];
+    this._hint = hit.one ? ['arith'] : ['add_neg_cancel'];
     this.setState({ tops: this.normTops(tops), slides: slides });
     clearTimeout(this._ss);
     this._ss = setTimeout(() => this.setState({ slides: {} }), 650);
     const a = this.label(r.a), b = this.label(r.b);
-    this.flash(at, '0 = ' + a + ' + ' + b + ' · additive inverse', 'ok');
+    this.flash(at, hit.one ? '1 = ' + a + '·' + b + ' · multiplicative inverse' : '0 = ' + a + ' + ' + b + ' · additive inverse', 'ok');
   }
   // a short text form of a term, for messages: −1·𝑣, (2 + 3)·𝑣
   label(n) {
     if (n.t === 's' || n.t === 'v') return this.elText(n);
+    if (this.flagged(n)) return (n.neg ? '−' : '') + '(' + this.label(Object.assign({}, n, { neg: false, inv: false })) + ')' + (n.inv ? '⁻¹' : '');
     if (n.t === 'prod') return n.factors.map(f => this.label(f)).concat(n.vec ? [this.label(n.vec)] : []).join('·');
     return '(' + n.terms.map(t => this.label(t.node)).join(' + ') + ')';
   }
@@ -1192,6 +1377,20 @@ export class Range extends Component {
     const pc = this.state.pieces.find(p => p.id === d.id);
     const home = this.state.pieces.map(p => p.id === d.id ? Object.assign({}, p, { x: p.hx, y: p.hy }) : p);
     let tops = this.clone(this.state.tops);
+    if (pc.kind === 'one') {
+      const hit = d.moved ? this.state.zeroHover : null;
+      this.setState({ pieces: home, zeroHover: null });
+      if (!d.moved) { this.flash({ x: 40, y: this.K.ZT }, 'Drag the 1 onto a tile: a scalar x becomes x·1, a vector 𝑣 becomes 1·𝑣', 'info'); return; }
+      if (!hit) return;
+      const at = this.P.get(hit.id); const tgt = this.locate(tops, hit.id).node; const name = this.label(tgt);
+      const one = this.addOne(tops, hit.id); if (!one) return;
+      this._hint = ['mul_one', 'one_smul'];
+      this.setState({ tops: this.normTops(tops), slide: { id: one.id, x: pc.x, y: pc.y } });
+      clearTimeout(this._st);
+      this._st = setTimeout(() => this.setState({ slide: null }), 450);
+      this.flash(at, name + ' = ' + (tgt.t === 'v' ? '1·' + name : name + '·1') + ' · multiplicative identity', 'ok');
+      return;
+    }
     if (pc.kind === 'zero' || pc.kind === 'zeroS') {
       const hit = d.moved ? this.state.zeroHover : null;
       this.setState({ pieces: home, zeroHover: null });
@@ -1271,6 +1470,71 @@ export class Range extends Component {
     this._ft = setTimeout(() => this.setState({ flash: null }), 2000);
   }
 
+  // ---------- the expression tree (tray): tap a tile on the board to see its cluster as a tree ----------
+  showTree(id) {
+    const loc = this.locate(this.state.tops, id); if (!loc) return;
+    const root = this.state.tops[loc.ti].node;
+    this.setState({ tree: { root: this.cloneFresh(root) }, treeLeaving: [], trayOpen: true, trayTab: 'tray' });
+  }
+  treeFind(root, id) { let f = null; this.walk(root, n => { if (n.id === id) f = n; }, null, null); return f; }
+  // Tap a leaf: it becomes its night tile (and back). Tap an operator: on vectors, toggle −(…); on scalars, cycle
+  // −(…) → −(…)⁻¹ → (…)⁻¹ → plain. Only the tree's copy changes: drag pieces out to use them.
+  treeTap(id) {
+    const before = this.treeVals(this.state.tree.root);
+    const t = this.clone(this.state.tree); const n = this.treeFind(t.root, id); if (!n) return;
+    if (n.t === 's') { if (n.val === '0') return; const neg = String(n.val).charAt(0) === '-'; n.val = neg ? String(n.val).slice(1) : '-' + n.val; n.el = neg ? n.el.replace(/^−/, '') : '−' + n.el; }
+    else if (n.t === 'v') { if (n.key === 'zero') return; n.neg = !n.neg; if (!n.neg) delete n.neg; }
+    else if (this.typeOf(n).k === 'v') { n.neg = !n.neg; if (!n.neg) delete n.neg; }
+    else {
+      if (!n.neg && !n.inv) n.neg = true; else if (n.neg && !n.inv) n.inv = true; else if (n.neg && n.inv) delete n.neg; else delete n.inv;
+    }
+    // what disappears (a − node, a ⁻¹ node, the box) pops out where it was
+    const after = this.treeVals(t.root); const keep = new Set(after.wraps.map(w => w.key).concat(after.boxes.map(b => b.key)));
+    const leaving = before.wraps.filter(w => !keep.has(w.key)).map(w => Object.assign({ wrap: true }, w))
+      .concat(before.boxes.filter(b => !keep.has(b.key)).map(b => Object.assign({ box: true }, b)));
+    this.setState({ tree: t, treeLeaving: leaving });
+    clearTimeout(this._tl);
+    if (leaving.length) this._tl = setTimeout(() => this.setState({ treeLeaving: [] }), 380);
+  }
+  // Layout: leaves (half-size tiles) along the bottom of each branch, operators as circles above their children.
+  // A cluster's − and ⁻¹ sit on the edge going up from its operator (one in the middle, two at thirds), and a box
+  // surrounds the subtree: night for −, a gold outline for ⁻¹ alone.
+  treeVals(root) {
+    const LEVEL = 96, TOP = 78, R0 = 17, GAP = 14;
+    const leaf = n => n.t === 's' || n.t === 'v';
+    const kids = n => n.t === 'prod' ? n.factors.concat(n.vec ? [n.vec] : []) : n.t === 'sum' ? n.terms.map(t => t.node) : [];
+    const leafW = n => n.t === 'v' ? n.w / 2 : 48;
+    const width = new Map();
+    const W = n => { const w = leaf(n) ? leafW(n) + GAP : Math.max(2 * R0 + GAP, kids(n).reduce((a, k) => a + W(k), 0)); width.set(n.id, w); return w; };
+    W(root);
+    const out = { nodes: [], edges: [], wraps: [], boxes: [] }; const pos = new Map(); let depthMax = 0;
+    const put = (n, x0, depth) => {
+      const w = width.get(n.id), cx = x0 + w / 2, cy = TOP + depth * LEVEL; depthMax = Math.max(depthMax, depth);
+      pos.set(n.id, { cx: cx, cy: cy, top: leaf(n) ? cy - 22 : cy - R0, bot: leaf(n) ? cy + 22 : cy + R0 });
+      if (leaf(n)) { out.nodes.push({ key: n.id, kind: 'leaf', node: n, x: cx - leafW(n) / 2, y: cy - 22, w: leafW(n), h: 44 }); return; }
+      out.nodes.push({ key: n.id, kind: 'op', node: n, x: cx - R0, y: cy - R0, w: 2 * R0, h: 2 * R0, sym: n.t === 'prod' ? '·' : '+' });
+      let x = x0; kids(n).forEach(k => { put(k, x, depth + 1); x += width.get(k.id); });
+    };
+    put(root, 0, 0);
+    const sub = n => { const ids = []; this.walk(n, m => ids.push(m.id), null, null); return ids; };
+    const edges = (n, parent) => {
+      const p = pos.get(n.id); const q = parent ? pos.get(parent.id) : null;
+      const y2 = q ? q.bot : p.top - LEVEL + 22;
+      if (q || this.flagged(n)) out.edges.push({ x1: p.cx, y1: p.top, x2: q ? q.cx : p.cx, y2: y2 });
+      if (this.flagged(n)) {
+        const x2 = q ? q.cx : p.cx;
+        const slots = n.neg && n.inv ? [['inv', 1 / 3], ['neg', 2 / 3]] : [[n.neg ? 'neg' : 'inv', 1 / 2]];
+        slots.forEach(([k, t]) => out.wraps.push({ key: n.id + ':' + k, kind: k, op: n.id, x: p.cx + (x2 - p.cx) * t - R0, y: p.top + (y2 - p.top) * t - R0, night: this.typeOf(n).k === 'v' ? '#182654' : '#3B2C12' }));
+        const ids = new Set(sub(n)); const ns = out.nodes.filter(m => ids.has(m.key));
+        const x0 = Math.min(...ns.map(m => m.x)), x1 = Math.max(...ns.map(m => m.x + m.w)), y0 = Math.min(...ns.map(m => m.y)), y1 = Math.max(...ns.map(m => m.y + m.h));
+        out.boxes.push({ key: n.id + ':box', x: x0 - 9, y: y0 - 9, w: x1 - x0 + 18, h: y1 - y0 + 18, neg: !!n.neg, inv: !!n.inv, night: this.typeOf(n).k === 'v' ? '#182654' : '#3B2C12' });
+      }
+      kids(n).forEach(k => edges(k, n));
+    };
+    edges(root, null);
+    out.w = width.get(root.id); out.h = TOP + depthMax * LEVEL + 22 + 14;
+    return out;
+  }
   // Tile data (for vecHtml / hexHtml) for any scalar or vector node at (x, y)
   tileOf(n, x, y) {
     const lk = this.look(n);
@@ -1284,14 +1548,14 @@ export class Range extends Component {
       face: lk.face, fg: lk.fg, lip: lk.lip, z: 6, scale: 1, shadow: 7, anim: 'none', down: null, aria: 'Scalar ' + n.el } };
   }
   draggedItem(kind) {
-    const d = this.idrag; if (!d || !d.moved) return [];
+    const d = this.idrag; if (!d || !d.moved || d.node.t === 'prod' || d.node.t === 'sum' || true) return [];
     const T = this.tileOf(d.node, d.x, d.y);
     return T.kind === kind ? [Object.assign(T.t, { z: 990, scale: 1.04, shadow: 14 })] : [];
   }
   // The tray popup (overlay units: 560 wide, scaled like the board at zoom 1): the two zeros, then whatever the player
   // has tapped, flowing in rows. Its tiles start a drag from where they sit on screen, converted to board
   // coordinates; the popup hides while a drag lasts. New items pop in.
-  trayVals(zs, zp, zeroHex, zeroTile) {
+  trayVals(zs, zp, zeroHex, zeroTile, po, oneHex) {
     const St = this.state;
     const toWorld = (ox, oy) => ({ x: ox / St.zoom - St.panX, y: oy / St.zoom - St.panY });
     const stop = e => { if (e && e.preventDefault) e.preventDefault(); if (e && e.stopPropagation) e.stopPropagation(); };
@@ -1305,11 +1569,31 @@ export class Range extends Component {
       this.idrag = { id: it.id, node: it.node, sx: e.clientX, sy: e.clientY, ox: w.x, oy: w.y, x: w.x, y: w.y, moved: false };
     };
     const entries = [{ kind: 'hex', w: 96, t: zeroHex, start: pieceStart(zs) }, { kind: 'vec', w: this.K.ZW, t: zeroTile, start: pieceStart(zp) }]
+      .concat(po ? [{ kind: 'hex', w: 96, t: oneHex, start: pieceStart(po) }] : [])
       .concat((St.trayItems || []).map(it => Object.assign(this.tileOf(it.node, 0, 0), { start: itemStart(it), id: it.id })));
     let x = 22, y = 64, rows = 1;
     entries.forEach(en => { if (x > 22 && x + en.w > 528 - 18) { x = 22; y += 104; rows++; } en.px = x; en.py = y; x += en.w + 14; });
-    const bottom = 84; const H = (St.trayTab === 'lean') ? Math.min(560, (St.bh || 716) / this.fitScale() - bottom - 140) : 64 + rows * 104 + 40;
+    const bottom = 84; const room = (St.bh || 716) / this.fitScale() - bottom - 140;
+    const TV = St.tree ? this.treeVals(St.tree.root) : null;
+    const treeTop = 64 + rows * 104;
+    const sc = TV ? Math.min(1, 488 / TV.w, Math.max(0.35, (room - treeTop - 50) / TV.h)) : 1;
+    const H = (St.trayTab === 'lean') ? Math.min(560, room) : treeTop + (TV ? TV.h * sc + 10 : 0) + 40;
     const top = (St.bh || 716) / this.fitScale() - bottom - H;
+    let tree = null;
+    if (TV) {
+      const tx0 = 20 + (488 - TV.w * sc) / 2;
+      const ov = (x, y) => ({ ox: 16 + tx0 + x * sc, oy: top + treeTop + y * sc });
+      const treeStart = (n, x, y) => e => {
+        stop(e);
+        const o = ov(x, y); const w = toWorld(o.ox, o.oy);
+        this.idrag = { id: n.id, node: this.cloneFresh(n), sx: e.clientX, sy: e.clientY, ox: w.x, oy: w.y, x: w.x, y: w.y, moved: false, tap: () => this.treeTap(n.id) };
+      };
+      const opNode = id => this.treeFind(St.tree.root, id);
+      tree = Object.assign({}, TV, { x: tx0, y: treeTop, scale: sc,
+        nodes: TV.nodes.map(m => Object.assign({}, m, { down: treeStart(m.node, m.x, m.y), mini: m.kind === 'leaf' ? this.tileOf(m.node, 0, 0) : null })),
+        wraps: TV.wraps.map(w => Object.assign({}, w, { down: treeStart(opNode(w.op), w.x, w.y) })),
+        leaving: St.treeLeaving || [] });
+    }
     const tiles = entries.map(en => {
       const fresh = en.id && St.trayNew && St.trayNew[en.id] != null;
       return Object.assign({}, en.t, { x: en.px, y: en.py, z: 1, scale: 1, shadow: 7,
@@ -1319,7 +1603,7 @@ export class Range extends Component {
     const dragging = (this.pdrag && this.pdrag.moved) || (this.idrag && this.idrag.moved);
     return {
       open: !!St.trayOpen, show: !!St.trayOpen && !dragging, tab: St.trayTab || 'tray', top: top, h: H, lean: this.leanVals(),
-      list: tiles.map((t, i) => ({ kind: entries[i].kind, t: t })), tiles: { hex: tiles[0], vec: tiles[1] }, captionY: H - 34,
+      list: tiles.map((t, i) => ({ kind: entries[i].kind, t: t })), tiles: { hex: tiles[0], vec: tiles[1], one: po ? tiles[2] : null }, captionY: H - 34, tree: tree,
       toggle: () => this.setState({ trayOpen: !this.state.trayOpen }),
       pick: tab => () => this.setState({ trayTab: tab })
     };
@@ -1445,6 +1729,32 @@ export class Range extends Component {
         </div>` : null}
     </div>`;
   }
+  // The tree in the tray. Edges in SVG; operators as circles; leaves as half-size tiles; − and ⁻¹ nodes on the edges
+  // (keyed, so they slide when one is added or removed, and pop in when new); boxes around negated or inverted
+  // subtrees; whatever was just removed pops out where it was.
+  treeHtml(T) {
+    const wrap = w => w.kind === 'neg'
+      ? html`<span style=${`display: flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: 17px; background: ${w.night}; border: 1.5px solid rgba(255,255,255,0.35); color: #F8FAFC; font-size: 24px; font-weight: 600`}>−</span>`
+      : html`<span style="display: flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: 17px; background: rgba(27,37,58,1); border: 2px solid #F2B33D; color: #FDE68A; font-family: 'STIX Two Text', serif; font-size: 19px"><i>x</i><sup style="font-size: 11px; margin-left: 1px; transform: translateY(-1px)">−1</sup></span>`;
+    const box = b => `position: absolute; left: ${b.x}px; top: ${b.y}px; width: ${b.w}px; height: ${b.h}px; box-sizing: border-box; border-radius: 16px; pointer-events: none;
+      border: 2px solid ${b.inv && !b.neg ? '#F2B33D' : b.inv ? '#F2B33D' : 'rgba(148,163,184,0.45)'}; background: ${b.neg ? `linear-gradient(to bottom, rgba(255,255,255,0.03) 45%, ${b.night} 45%)` : 'transparent'}; transition: left 0.25s ease, top 0.25s ease, width 0.25s ease, height 0.25s ease`;
+    return html`
+    <div style=${`position: absolute; left: ${T.x}px; top: ${T.y}px; width: ${T.w}px; height: ${T.h}px; transform: scale(${T.scale}); transform-origin: 0 0; pointer-events: auto`}>
+      ${T.boxes.map(b => html`<div key=${b.key} style=${box(b) + '; animation: boxIn 0.32s cubic-bezier(0.2, 1.4, 0.4, 1) both'}></div>`)}
+      ${T.leaving.filter(l => l.box).map(b => html`<div key=${b.key + ':out'} style=${box(b) + '; animation: boxOut 0.3s ease-in both'}></div>`)}
+      <svg width=${T.w} height=${T.h} style="position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none">
+        ${T.edges.map(e => html`<line x1=${e.x1} y1=${e.y1} x2=${e.x2} y2=${e.y2} stroke="rgba(203,213,225,0.55)" stroke-width="2" stroke-linecap="round"></line>`)}
+      </svg>
+      ${T.nodes.map(m => m.kind === 'op' ? html`
+        <button key=${m.key} onPointerDown=${m.down} aria-label=${'Operator ' + m.sym + ': tap to negate or invert this group, drag it out'} style=${`position: absolute; left: ${m.x}px; top: ${m.y}px; width: 34px; height: 34px; padding: 0; border-radius: 17px; border: 1.5px solid rgba(203,213,225,0.6); background: rgba(27,37,58,1); color: #E2E8F0; font-family: Inter, system-ui, sans-serif; font-size: 22px; line-height: 30px; touch-action: none; cursor: grab`}>${m.sym}</button>
+      ` : html`
+        <div key=${m.key} onPointerDown=${m.down} style=${`position: absolute; left: ${m.x}px; top: ${m.y}px; width: ${m.w}px; height: 44px; touch-action: none; cursor: grab`}>
+          <div style=${`position: absolute; left: ${(m.w - m.mini.w) / 2}px; top: -22px; width: ${m.mini.w}px; height: 88px; transform: scale(0.5); transform-origin: 50% 50%; pointer-events: none`}>${m.mini.kind === 'vec' ? this.vecHtml(m.mini.t) : this.hexHtml(m.mini.t)}</div>
+        </div>`)}
+      ${T.wraps.map(w => html`<div key=${w.key} onPointerDown=${w.down} role="button" aria-label=${w.kind === 'neg' ? 'Additive inverse: tap to change, drag the group out' : 'Multiplicative inverse: tap to change, drag the group out'} style=${`position: absolute; left: ${w.x}px; top: ${w.y}px; touch-action: none; cursor: grab; transition: left 0.25s ease, top 0.25s ease; animation: trayPop 0.35s cubic-bezier(0.2, 1.5, 0.4, 1) both`}>${wrap(w)}</div>`)}
+      ${T.leaving.filter(l => l.wrap).map(w => html`<div key=${w.key + ':out'} style=${`position: absolute; left: ${w.x}px; top: ${w.y}px; pointer-events: none; animation: popOut 0.3s ease-in both`}>${wrap(w)}</div>`)}
+    </div>`;
+  }
   /* ---------- render ---------- */
   vecHtml(t) {
     return html`
@@ -1456,7 +1766,7 @@ export class Range extends Component {
         </span>
         <span style="position: absolute; left: 0; top: 5px; width: 100%; height: 83px; display: block; clip-path: polygon(33px 0, calc(100% - 22px) 0, 100% 50%, calc(100% - 22px) 100%, 33px 100%, 55px 50%); background: ${t.lip}"></span>
         <span style=${`position: absolute; left: 0; top: 0; width: 100%; height: 83px; display: block; clip-path: polygon(33px 0, calc(100% - 22px) 0, 100% 50%, calc(100% - 22px) 100%, 33px 100%, 55px 50%); background: ${t.face}`}>
-          <span style="position: absolute; left: 0; top: 0; right: 0; height: 30px; box-sizing: border-box; padding: 0 26px 0 60px; display: flex; align-items: center; justify-content: center; background: #2F5BD3; color: #FFFFFF; font-size: 15px; font-weight: 700; white-space: nowrap">${t.type}</span>
+          <span style=${`position: absolute; left: 0; top: 0; right: 0; height: 30px; box-sizing: border-box; padding: 0 26px 0 60px; display: flex; align-items: center; justify-content: center; background: ${t.vband || '#2F5BD3'}; box-shadow: ${t.vbandShadow || 'none'}; color: ${t.vbandFg || '#FFFFFF'}; font-size: 15px; font-weight: 700; white-space: nowrap`}>${t.type}</span>
           <span style=${`position: absolute; left: 0; top: 30px; right: 0; bottom: 0; box-sizing: border-box; padding: 0 26px 0 60px; display: flex; align-items: center; justify-content: center; font-size: ${t.elSize}px; color: ${t.fg}; white-space: nowrap`}>${t.el}</span>
         </span>
         ${t.hasField ? html`
@@ -1472,7 +1782,7 @@ export class Range extends Component {
       <button onPointerDown=${t.down} aria-label=${t.aria} style=${`position: absolute; left: ${t.x}px; top: ${t.y}px; width: 96px; height: 88px; padding: 0; border: none; background: transparent; touch-action: none; cursor: grab; z-index: ${t.z}; transform: translateY(${t.sink}px) scale(${t.scale}); filter: drop-shadow(0 ${t.shadow}px 12px rgba(0,0,0,0.40)); animation: ${t.anim}; --dx: ${t.dx}px; --dy: ${t.dy}px; font-family: inherit`}>
         <span style="position: absolute; left: 0; top: 5px; width: 100%; height: 83px; display: block; clip-path: polygon(22px 0, calc(100% - 22px) 0, 100% 50%, calc(100% - 22px) 100%, 22px 100%, 0 50%); background: ${t.lip}"></span>
         <span style=${`position: absolute; left: 0; top: 0; width: 100%; height: 83px; display: flex; flex-direction: column; clip-path: polygon(22px 0, calc(100% - 22px) 0, 100% 50%, calc(100% - 22px) 100%, 22px 100%, 0 50%); background: ${t.face}`}>
-          <span style=${`height: 30px; display: flex; align-items: center; justify-content: center; background: ${t.band}; color: #2A1D04; font-size: 17px; font-weight: 700`}>${t.type}</span>
+          <span style=${`height: 30px; display: flex; align-items: center; justify-content: center; background: ${t.band}; box-shadow: ${t.bandShadow || 'none'}; color: ${t.bandFg || '#2A1D04'}; font-size: 17px; font-weight: 700`}>${t.type}</span>
           <span style=${`flex: 1 1 auto; display: flex; align-items: center; justify-content: center; font-size: ${t.elSize}px; color: ${t.fg}; white-space: nowrap`}>${t.el}</span>
         </span>
       </button>`;
@@ -1484,6 +1794,7 @@ export class Range extends Component {
     this._glow = St.preview && (St.preview.type === 'collect' || St.preview.type === 'collectV') ? new Set(St.preview.glow) : null;
     if (St.zeroHover) this._glow = new Set(St.zeroHover.glow || [St.zeroHover.id]);
     const R = this.layout(St.tops);
+    if (this.idrag && this.idrag.moved) { this.measure(this.idrag.node); this.place(this.idrag.node, this.idrag.x, this.idrag.y, 0, { z: 990 }); }
     const zb = { l: 10, r: 550, t: this.K.ZT, b: this.K.ZB }; // set below, once the readout is known
     const results = [];
     // While a tile is being dragged, the readout stays as it was when the drag began, with the moving part (and
@@ -1561,11 +1872,19 @@ export class Range extends Component {
     const zeroTile = { x: zp.x, y: zp.y, w: this.K.ZW, type: zDrag && St.zeroHover ? (St.zeroHover.sp || '𝑉').split(' ')[0] : '𝑉', el: '0', elSize: 27, face: '#F5F8FF', fg: '#16130C', lip: '#1E3A8A',
       hasField: false, z: zDrag ? 990 : 6, scale: zDrag ? 1.04 : 1, shadow: zDrag ? 14 : 7, anim: 'none', dx: 0, dy: 0, down: this.pieceDown(zp),
       aria: 'The zero vector: drag it onto a vector, or onto a vector sum’s right bracket, to add + 0' };
+    const recessS = { band: '#C38F2A', bandShadow: 'inset 0 3px 6px rgba(60,38,0,0.6)', bandFg: '#5A420E' };
+    const recessV = { vband: '#1F3F9A', vbandShadow: 'inset 0 3px 6px rgba(5,15,50,0.7)', vbandFg: '#B8C7F0' };
+    Object.assign(zeroTile, recessV, zDrag && St.zeroHover ? {} : { type: '𝑉' });
+    const po = St.pieces.find(p => p.kind === 'one'); const poDrag = !!(po && this.pdrag && this.pdrag.id === po.id);
+    const oneHex = po ? Object.assign({ x: po.x, y: po.y, dx: 0, dy: 0, el: '1', elSize: 28, face: '#FFF8E6', fg: '#16130C', lip: '#B7791F', sink: 0,
+      type: poDrag && St.zeroHover && St.zeroHover.f ? this.fieldSym(St.zeroHover.f) : '𝐅', z: poDrag ? 990 : 6, scale: poDrag ? 1.04 : 1, shadow: poDrag ? 14 : 7, anim: 'none',
+      down: this.pieceDown(po), aria: 'The scalar 1: drag it onto a tile to multiply by 1' }, poDrag && St.zeroHover ? { band: '#F2B33D' } : recessS) : null;
     const zs = St.pieces.find(p => p.kind === 'zeroS'); const zsDrag = !!(this.pdrag && this.pdrag.id === zs.id);
     const zsHover = zsDrag && St.zeroHover;
     const zeroHex = { x: zs.x, y: zs.y, dx: 0, dy: 0, el: '0', elSize: 28, face: '#FFF8E6', fg: '#16130C', lip: '#B7791F', type: zs.field ? this.fieldSym(zs.field) : zsHover && zsHover.f ? this.fieldSym(zsHover.f) : '𝐅', band: '#F2B33D', sink: 0,
       z: zsDrag ? 990 : 6, scale: zsDrag ? 1.04 : 1, shadow: zsDrag ? 14 : 7, anim: 'none', down: this.pieceDown(zs),
       aria: 'The scalar zero: drag it onto a scalar, or onto a scalar sum’s right bracket, to add + 0' };
+    if (!(zsDrag && zsHover)) Object.assign(zeroHex, recessS, { type: '𝐅' });
     return {
       setBoard: this.setBoard, panDown: this.panDown(), panX: St.panX, panY: St.panY, worldScale: this.scaleNow(),
       baseScale: this.fitScale(), overlayH: (St.bh || 716) / this.fitScale(),
@@ -1573,9 +1892,10 @@ export class Range extends Component {
       zoomReset: () => this.setState({ zoom: 1, panX: 0, panY: 0 }), showReset: Math.abs(St.zoom - 1) > 0.01 || St.panX !== 0 || St.panY !== 0, zoomPct: Math.round(St.zoom * 100),
       zoneL: zb.l, zoneW: zb.r - zb.l, zoneT: zb.t, zoneH: zb.b - zb.t,
       ghosts: ghosts, groups: R.groups, pluses: R.pluses,
-      vecs: R.vecs.concat(this.props.legacy || zDrag ? [zeroTile] : [], this.draggedItem('vec')), hexes: R.hexes.concat(this.props.legacy || zsDrag ? [zeroHex] : [], this.draggedItem('hex')),
+      vecs: R.vecs.concat(this.props.legacy || zDrag ? [zeroTile] : [], this.draggedItem('vec')), hexes: R.hexes.concat(this.props.legacy || zsDrag ? [zeroHex] : [], poDrag ? [oneHex] : [], this.draggedItem('hex')),
+      boxes: R.boxes,
       heads: this.props.legacy ? null : this.headVals(), won: won, sparks: sparks, exprY: this.K.ZT + 10,
-      tray: this.props.legacy ? null : this.trayVals(zs, zp, zeroHex, zeroTile), dots: R.dots, strips: strips,
+      tray: this.props.legacy ? null : this.trayVals(zs, zp, zeroHex, zeroTile, po, oneHex), dots: R.dots, strips: strips,
       parenSrc: ps ? { x: ps.x, y: ps.y, z: this.pdrag && this.pdrag.id === ps.id ? 990 : 5, op: rules ? 0.3 : 1, pe: rules ? 'none' : 'auto', down: this.pieceDown(ps) } : null,
       legacy: !!this.props.legacy, trayH: this.props.legacy ? 414 : 190,
       results: results, flashes: flashes,
@@ -1608,6 +1928,11 @@ export class Range extends Component {
     <div style="position: absolute; left: 28px; top: 556px; font-family: Inter, system-ui, sans-serif; font-size: 14px; font-weight: 700; letter-spacing: 0.12em; color: #94A3B8; pointer-events: none">TRAY</div>` : null}
     ${v.legacy ? html`<div style="position: absolute; left: 150px; right: 30px; top: 553px; font-size: 18px; color: #CBD5E1; text-align: right; pointer-events: none">𝑈: the plane 𝑥 − 2𝑦 + 𝑧 = 0 in ℝ³</div>` : null}
 
+    ${(v.boxes || []).map(b => html`
+      <div onPointerDown=${b.down} aria-label=${b.aria} style=${`position: absolute; left: ${b.x}px; top: ${b.y}px; width: ${b.w}px; height: ${b.h}px; box-sizing: border-box; border-radius: 20px; z-index: ${b.z}; touch-action: none; cursor: grab; animation: ${b.anim};
+        border: 2px solid ${b.inv ? '#F2B33D' : 'rgba(148,163,184,0.45)'}; background: ${b.neg ? `linear-gradient(to bottom, rgba(255,255,255,0.03) 50%, ${b.night} 50%)` : 'rgba(255,255,255,0.03)'}`}>
+        ${b.inv ? html`<span style="position: absolute; right: 5px; top: 2px; font-family: 'STIX Two Text', serif; font-size: 19px; font-weight: 600; color: #F2B33D">−1</span>` : null}
+      </div>`)}
     ${v.groups.map((g) => html`
       <div style=${`position: absolute; left: ${g.x}px; top: ${g.y}px; width: ${g.w}px; height: ${g.h}px; z-index: ${g.z}; pointer-events: none; transform: scale(${g.scale}); transform-origin: 50% 50%; animation: ${g.anim}`}>
         <div style=${`position: absolute; left: ${g.bgL}px; right: 30px; top: 0; bottom: 0; border-radius: 24px; background: rgba(255,255,255,0.045); border: 1.5px solid rgba(255,255,255,0.08)`}></div>
@@ -1625,7 +1950,7 @@ export class Range extends Component {
     `)}
 
     ${v.pluses.map((p) => html`
-      <button onClick=${p.tap} aria-label="Plus. Double-tap to line these terms up" style=${`position: absolute; left: ${p.x}px; top: ${p.y}px; width: 38px; height: 38px; padding: 0; border-radius: 19px; z-index: ${p.z}; border: 1.5px solid rgba(203,213,225,0.45); background: rgba(148,163,184,0.20); color: #E2E8F0; font-family: Inter, system-ui, sans-serif; font-size: 26px; font-weight: 500; line-height: 34px; text-align: center; opacity: ${p.op}; pointer-events: ${p.pe}; transition: opacity 0.3s ease; cursor: pointer`}>+</button>
+      <button onClick=${p.tap} aria-label="Plus. Double-tap to line these terms up" style=${`position: absolute; left: ${p.x}px; top: ${p.y}px; width: 38px; height: 38px; padding: 0; border-radius: 19px; z-index: ${p.z}; border: 1.5px solid rgba(203,213,225,0.45); background: rgba(148,163,184,0.20); color: #E2E8F0; font-family: Inter, system-ui, sans-serif; font-size: 26px; font-weight: 500; line-height: 34px; text-align: center; opacity: ${p.op}; pointer-events: ${p.pe}; transition: opacity 0.3s ease; cursor: pointer`}>${p.sym || '+'}</button>
     `)}
 
     ${v.vecs.map(t => this.vecHtml(t))}
@@ -1688,7 +2013,8 @@ export class Range extends Component {
         ${v.tray.tab === 'tray' ? html`
           <div style="position: absolute; left: 0; right: 0; top: 0; bottom: 0; pointer-events: none">
             <div style="pointer-events: auto">${v.tray.list.map(x => x.kind === 'hex' ? this.hexHtml(x.t) : this.vecHtml(x.t))}</div>
-            <div style=${`position: absolute; left: 22px; right: 20px; top: ${v.tray.captionY}px; font-size: 14px; line-height: 19px; color: #94A3B8`}>Tap a tile on the board to bring it and its inverse here · drag a 0 onto a term to add + 0 · drag a tile onto a matching 0 to split the 0</div>
+            ${v.tray.tree ? this.treeHtml(v.tray.tree) : null}
+            <div style=${`position: absolute; left: 22px; right: 20px; top: ${v.tray.captionY}px; font-size: 14px; line-height: 19px; color: #94A3B8`}>Tap a tile on the board to see its group as a tree · tap a tree node to negate or invert it · drag a node out onto a matching 0 (or 1) to split it</div>
           </div>
         ` : html`
           ${this.leanHtml(v.tray.lean)}
