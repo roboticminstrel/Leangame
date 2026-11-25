@@ -613,3 +613,36 @@ test('reaching the goal plays the win: the expression is exactly 0 in 𝑉', () 
   c.setState({ tops: [{ node: c.mkS('R', '0', '0'), x: 24, y: c.K.ZT + 110 }] });
   assert.equal(c.renderVals().won, false);
 });
+
+test('the live proof: the board is sent as Lean trees, one finished move at a time, with the law it used', () => {
+  const calls = [];
+  const lean = { setLevel: (s, g) => calls.push(['level', s, g]), boardChanged: (f, t, h) => calls.push(['move', f, t, h]), subscribe: () => () => {} };
+  const c = makeLive({ lean });
+  c.initLean();
+  assert.deepEqual(calls[0], ['level', { smul: [{ n: 0 }, { v: 'v' }] }, { zero: true }]);
+  dragPiece(c, 'PZ', ...centre(c, c.state.tops[0].node.vec.id));   // 0𝑣 + 0
+  c.noteBoard();
+  assert.deepEqual(calls[1], ['move', { smul: [{ n: 0 }, { v: 'v' }] }, { add: [{ smul: [{ n: 0 }, { v: 'v' }] }, { zero: true }] }, ['add_zero']]);
+  c.noteBoard();
+  assert.equal(calls.length, 2, 'nothing new, nothing sent');
+  tap(c, c.state.tops[0].node.vec.id);
+  const z = c.state.tops.find(t => t.node.key === 'zero').node;
+  dragItem(c, '−𝑣', ...centre(c, z.id));
+  c.noteBoard();
+  assert.deepEqual(calls[2][2], { add: [{ smul: [{ n: 0 }, { v: 'v' }] }, { neg: { v: 'v' } }, { v: 'v' }] });
+  assert.deepEqual(calls[2][3], ['add_neg_cancel']);
+});
+
+test('the Lean tab shows the live proof: steps, goal, and No goals at the end', () => {
+  const c = makeLevel();
+  c.setState({ trayOpen: true, trayTab: 'lean', leanStatus: { state: 'ready' },
+    leanLive: { state: 'live', theorem: 'theorem level1 … := by', steps: [{ ok: true, hint: ['add_zero'] }, { ok: false, hint: null, error: 'Lean refused the step' }], goals: ['v : V\n⊢ 0 • v + 0 = 0'], done: false } });
+  let L = c.renderVals().tray.lean;
+  assert.equal(L.status, 'Lean is running this proof live');
+  assert.equal(L.live.goals[0], 'v : V\n⊢ 0 • v + 0 = 0');
+  c.setState({ leanLive: Object.assign({}, c.state.leanLive, { goals: [], done: true, verified: true }) });
+  L = c.renderVals().tray.lean;
+  assert.equal(L.live.done, true);
+  c.setState({ leanStatus: { state: 'asleep' } });
+  assert.match(c.renderVals().tray.lean.status, /Press Play/);
+});

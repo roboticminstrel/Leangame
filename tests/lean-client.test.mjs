@@ -83,3 +83,31 @@ test('gives up on a boot that takes too long', async () => {
   for (let i = 0; i < 401 && c.pending; i++) await c.run();
   assert.equal(lean.status.state, 'error');
 });
+
+test('live proof: starts when Lean is ready, replays the moves made before, then sends each new one', async () => {
+  const c = clock();
+  const bodies = [];
+  const fetch = async (url, opts) => {
+    const b = opts.body ? JSON.parse(opts.body) : null;
+    let out = { state: 'ready' };
+    if (url.endsWith('/check')) {
+      bodies.push(b);
+      out = b.session === 'start' ? { ok: true, sid: 's1', theorem: 'theorem level1 …', goals: ['⊢ 0 • v = 0'] }
+        : b.to.zero ? { ok: true, goals: [], done: true, verified: true } : { ok: true, goals: ['⊢ next = 0'], done: false };
+    }
+    return { ok: true, status: 200, headers: { get: () => 'application/json' }, json: async () => out };
+  };
+  const lean = createLean({ fetch, ...c });
+  lean.setLevel({ a: 0 }, { zero: true });
+  lean.boardChanged({ a: 0 }, { a: 1 }, ['add_zero']);       // made while Lean is asleep
+  assert.equal(bodies.length, 0);
+  await lean.wake();                                            // answers ready
+  for (let i = 0; i < 5; i++) await new Promise(r => setImmediate(r));
+  assert.deepEqual(bodies.map(b => b.session), ['start', 'step'], 'started, then replayed the earlier move');
+  assert.deepEqual(lean.live.goals, ['⊢ next = 0']);
+  lean.boardChanged({ a: 1 }, { zero: true }, null);
+  for (let i = 0; i < 5; i++) await new Promise(r => setImmediate(r));
+  assert.equal(lean.live.done, true);
+  assert.equal(lean.live.verified, true);
+  assert.equal(lean.live.steps.length, 2);
+});

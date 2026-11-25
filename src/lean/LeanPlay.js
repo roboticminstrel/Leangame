@@ -19,7 +19,8 @@ export class LeanPlay extends Component {
   constructor(props) {
     super(props);
     this.state = { s: { state: 'asleep' } };
-    this.lean = props.lean || createLean({ onChange: (s) => this.setState({ s }) });
+    this.lean = props.lean || createLean();
+    this.unsub = this.lean.subscribe((s) => this.setState({ s }));
     this.onActivity = () => this.lean.touch();
     this.play = () => {
       const st = this.state.s.state;
@@ -34,6 +35,7 @@ export class LeanPlay extends Component {
 
   componentWillUnmount() {
     window.removeEventListener('pointerdown', this.onActivity, true);
+    if (this.unsub) this.unsub();
     this.lean.stop();
   }
 

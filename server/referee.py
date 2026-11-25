@@ -8,6 +8,10 @@ browser's requests here; every request carries the shared token in X-Lean-Token.
     POST /touch    the player is still here: restart the idle clock
     POST /check    {"lhs": tree, "rhs": tree, "rule": "add_smul"} -> {"ok", "lean", "errors"}
                    (trees and rules: render.py)
+                   A live proof (the Lean tab), also through /check so the gate needs no new routes:
+                   {"session": "start", "start": tree, "goal": tree} -> {"ok", "sid", "theorem", "goals"}
+                   {"session": "step", "sid", "from": tree, "to": tree, "hint": [rules]}
+                       -> {"ok", "goals", "done", "verified", "tactic"} (on a refused step the proof stays put)
 
 After --idle-minutes with no /touch or /check, the machine shuts itself down (on AWS that terminates it).
 
@@ -54,6 +58,7 @@ class Repl:
         self.env = None
         self.count = 0
         self.error = None
+        self.restarts = 0
 
     def start(self):
         self.stop()
@@ -68,6 +73,7 @@ class Repl:
             raise RuntimeError(f"importing Leangame failed: {errs or r}")
         self.env = r["env"]
         self.count = 0
+        self.restarts += 1
         log(f"REPL ready in {time.time() - t:.1f}s")
 
     def stop(self):
@@ -94,6 +100,20 @@ class Repl:
                 self.buf += chunk
         text, self.buf = self.buf.split(b"\n\n", 1)
         return json.loads(text)
+
+    def raw(self, obj, timeout=CHECK_SECONDS):
+        """Send any REPL request (a command in the imported environment, or a tactic on a proof state)."""
+        with self.lock:
+            if self.env is None or self.count >= RESTART_AFTER:
+                self.start()
+            self.count += 1
+            if "cmd" in obj:
+                obj = dict(obj, env=self.env)
+            try:
+                return self._send(obj, timeout=timeout)
+            except Exception:
+                self.stop()
+                raise
 
     def run(self, cmd):
         """Run one command in the imported environment; returns the error messages (none: it checked)."""
@@ -146,6 +166,81 @@ def check(repl, body):
     return 200, {"ok": not errors, "lean": cmd, "errors": errors[:3]}
 
 
+class Sessions:
+    """Live proofs: each is the theorem, its REPL proof state, and the tactics so far. Proof states live in the
+    REPL process, so a REPL restart ends every session (the client starts a new one)."""
+
+    def __init__(self, repl):
+        self.repl = repl
+        self.live = {}
+        self.n = 0
+        self.lock = threading.Lock()
+
+    @staticmethod
+    def goals_of(r):
+        if "goals" in r:
+            return r["goals"]
+        return [x.get("goal", "") for x in r.get("sorries", [])]
+
+    @staticmethod
+    def errors_of(r):
+        errs = [m.get("data", "") for m in r.get("messages", []) if m.get("severity") == "error"]
+        if "message" in r:
+            errs.append(r["message"])
+        return errs
+
+    def start(self, body):
+        head = render.theorem(body.get("start"), body.get("goal"))
+        r = self.repl.raw({"cmd": head + "\n  sorry"})
+        errs = self.errors_of(r)
+        sorries = r.get("sorries", [])
+        if errs or not sorries:
+            return 422, {"ok": False, "error": (errs or ["Lean found no goal"])[0][:400]}
+        with self.lock:
+            self.n += 1
+            sid = f"s{self.n}"
+            if len(self.live) > 50:
+                self.live.pop(next(iter(self.live)))
+            self.live[sid] = {"ps": sorries[0]["proofState"], "head": head, "tactics": [], "restarts": self.repl.restarts}
+        return 200, {"ok": True, "sid": sid, "theorem": head, "goals": self.goals_of(r)}
+
+    def step(self, body):
+        s = self.live.get(body.get("sid"))
+        if not s or s["restarts"] != self.repl.restarts:
+            return 409, {"ok": False, "error": "session ended: start again"}
+        tac = render.step(body.get("from"), body.get("to"), body.get("hint"))
+        r = self.repl.raw({"tactic": tac, "proofState": s["ps"]})
+        errs = self.errors_of(r)
+        if errs or "proofState" not in r:
+            return 200, {"ok": False, "error": (errs or ["Lean refused the step"])[0][:400], "goals": None}
+        s["ps"] = r["proofState"]
+        s["tactics"].append(tac)
+        goals = self.goals_of(r)
+        out = {"ok": True, "goals": goals, "done": not goals, "tactic": tac}
+        if not goals:
+            # the whole proof, compiled from scratch: no errors and no sorry
+            full = s["head"] + "".join("\n  " + t for t in s["tactics"])
+            errors = self.repl.run(full)
+            out["verified"] = not errors
+            if errors:
+                out["verify_error"] = errors[0][:400]
+        return 200, out
+
+
+def session(sessions, body):
+    try:
+        if body.get("session") == "start":
+            return sessions.start(body)
+        if body.get("session") == "step":
+            return sessions.step(body)
+        return 400, {"ok": False, "error": "session is start or step"}
+    except render.BadInput as e:
+        return 400, {"ok": False, "error": str(e)}
+    except Exception as e:
+        log("session failed:", e)
+        return 503, {"ok": False, "error": f"Lean: {e}"}
+
+
 def make_handler(state):
     class Handler(BaseHTTPRequestHandler):
         server_version = "leangame-referee"
@@ -193,6 +288,8 @@ def make_handler(state):
                 return self.reply(200, {"ok": True, "ready": state.repl.ready})
             if self.path == "/check":
                 state.touch()
+                if "session" in body:
+                    return self.reply(*session(state.sessions, body))
                 return self.reply(*check(state.repl, body))
             self.reply(404, {"ok": False, "error": "not found"})
 
@@ -238,6 +335,32 @@ def selftest():
         bad += got != want
         print(f"{mark} {name}: {'checks' if got else 'rejected'} ({time.time() - t:.2f}s)"
               + ("" if got == want or not errors else f"\n     {errors[0][:300]}"), flush=True)
+    # a live proof: (a + b)v + 0 → (a + b)v → av + bv, the goal; a wrong step in between is refused
+    ss = Sessions(repl)
+    t = time.time()
+    lhs0 = {"add": [{"smul": [{"add": [a, b]}, w]}, {"zero": True}]}
+    mid = {"smul": [{"add": [a, b]}, w]}
+    goal = {"add": [{"smul": [a, w]}, {"smul": [b, w]}]}
+    code, st = ss.start({"start": lhs0, "goal": goal})
+    sid = st.get("sid")
+    checks = [
+        ("live: start", code == 200 and st.get("ok") and len(st.get("goals", [])) == 1),
+        ("live: a wrong step is refused", not ss.step({"sid": sid, "from": lhs0, "to": {"smul": [a, w]}})[1]["ok"]),
+    ]
+    r1 = ss.step({"sid": sid, "from": lhs0, "to": mid, "hint": ["add_zero"]})[1]
+    checks.append(("live: + 0 absorbed, one goal left", r1.get("ok") and len(r1.get("goals") or []) == 1 and not r1.get("done")))
+    r2 = ss.step({"sid": sid, "from": mid, "to": goal, "hint": ["add_smul"]})[1]
+    checks.append(("live: distributing reaches the goal: no goals", r2.get("ok") and r2.get("done")))
+    checks.append(("live: the whole proof compiles", r2.get("verified") is True))
+    code, st2 = ss.start({"start": {"add": [u, w]}, "goal": {"add": [w, u]}})
+    r3 = ss.step({"sid": st2.get("sid"), "from": {"add": [u, w]}, "to": {"add": [w, u]}})[1]
+    checks.append(("live: rearranging a sum is a step (ac_rfl)", r3.get("ok") and r3.get("done") and r3.get("verified")))
+    for name, good in checks:
+        bad += not good
+        print(f"{'ok  ' if good else 'FAIL'} {name}", flush=True)
+    if any(not g for _, g in checks):
+        print("     details:", json.dumps({"start": st, "r1": r1, "r2": r2, "r3": r3})[:1500], flush=True)
+    print(f"live proof: {time.time() - t:.2f}s", flush=True)
     repl.stop()
     print("selftest:", "passed" if not bad else f"{bad} failed")
     return 1 if bad else 0
@@ -259,6 +382,7 @@ def main():
         sys.exit("set LEAN_TOKEN")
     repl = Repl()
     state = State(repl, token, args.idle_minutes * 60)
+    state.sessions = Sessions(repl)
 
     def warm():
         try:

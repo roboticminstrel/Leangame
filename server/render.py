@@ -57,8 +57,10 @@ ARITH = "arith"
 
 OCCURRENCES = 3  # try a lemma at its 1st, 2nd and 3rd match
 
-HEADER = ("example {F V : Type} [Field F] [Add V] [Zero V] [Neg V] [SMul F V] [Axler.AddLaws V] "
-          "[Axler.VectorSpace F V]")
+BINDERS = ("{F V : Type} [Field F] [Add V] [Zero V] [Neg V] [SMul F V] [Axler.AddLaws V] "
+           "[Axler.VectorSpace F V]")
+HEADER = "example " + BINDERS
+AUTO = "auto"  # any rule in RULES (the board's hint, if it sends one, is tried first)
 
 
 class BadInput(ValueError):
@@ -140,6 +142,8 @@ def term(e):
 def tactic(rule):
     if rule == ARITH:
         return "norm_num"
+    if rule == AUTO:
+        return "first\n    " + "\n    ".join("| " + t for t in alternatives(list(RULES)))
     if rule not in RULES:
         raise BadInput(f"unknown move {rule!r}")
     tries = []
@@ -151,8 +155,8 @@ def tactic(rule):
     return "first\n    " + "\n    ".join("| " + t for t in tries)
 
 
-def statement(lhs, rhs):
-    """`example … : lhs = rhs` (without the proof). Raises BadInput for a malformed or ill-typed pair."""
+def _check(lhs, rhs):
+    """Check both trees (same sort, names used one way) and return the variable binders they need."""
     w = _Walk()
     a, b = w.sort(lhs), w.sort(rhs)
     if a != b:
@@ -165,7 +169,48 @@ def statement(lhs, rhs):
         binders += f" ({' '.join(sorted(w.scalars))} : F)"
     if w.vectors:
         binders += f" ({' '.join(sorted(w.vectors))} : V)"
-    return f"{HEADER}{binders} :\n    {term(lhs)} = {term(rhs)}"
+    return binders
+
+
+def statement(lhs, rhs):
+    """`example … : lhs = rhs` (without the proof). Raises BadInput for a malformed or ill-typed pair."""
+    return f"{HEADER}{_check(lhs, rhs)} :\n    {term(lhs)} = {term(rhs)}"
+
+
+# ---------- a live proof (the Lean tab): the level as a theorem, one board move per step ----------
+
+def theorem(start, goal, name="level1"):
+    """`theorem level1 … : start = goal := by` (the steps follow, one per line)."""
+    if not re.match(r"^[a-z][a-z0-9_]{0,30}$", name):
+        raise BadInput("bad theorem name")
+    return f"theorem {name} {BINDERS}{_check(start, goal)} :\n    {term(start)} = {term(goal)} := by"
+
+
+def alternatives(rules):
+    """Tactics that might prove one board move, in order: rearranging alone (ac_rfl), then each rule's lemmas both
+    ways, at their first few matches, finishing with ac_rfl when the rewrite leaves the terms in another order."""
+    tries = ["ac_rfl"]
+    for rule in rules:
+        if rule == ARITH:
+            tries.append("norm_num")
+            continue
+        for lemma in RULES[rule]:
+            for arrow in ("", "← "):
+                for n in range(1, OCCURRENCES + 1):
+                    rw = f"rw [{arrow}{lemma}]" if n == 1 else f"nth_rw {n} [{arrow}{lemma}]"
+                    tries.append(f"({rw}; done)")
+                    tries.append(f"({rw}; ac_rfl)")
+    return tries
+
+
+def step(frm, to, hint=None):
+    """The tactic for one move in the live proof. The goal is `current = goal`; this proves `current = next` with the
+    move's rule (hint) or any rule, and leaves `next = goal`, closed at once when next is the goal itself."""
+    _check(frm, to)
+    hints = [h for h in (hint or []) if h in RULES or h == ARITH]
+    rules = hints + [r for r in RULES if r not in hints]
+    alts = " | ".join(alternatives(rules))
+    return f"refine Eq.trans (show {term(frm)} = {term(to)} by first | {alts}) ?_ <;> try with_reducible rfl"
 
 
 def move(lhs, rhs, rule):

@@ -4,6 +4,9 @@
 //   wake()   Play: start the machine if it's asleep, then poll until Lean is ready
 //   touch()  the player did something: keeps the machine from shutting down (at most once a minute)
 //   check(lhs, rhs, rule)  ask Lean whether one board move is valid (trees: server/render.py)
+//   setLevel(start, goal)   the level being played: a live proof of start = goal runs on the machine (the Lean tab)
+//   boardChanged(from, to, hint)  a finished move; once Lean is ready each one becomes a step of that proof, and the
+//                           moves made before Lean was ready are replayed when it is
 //
 // The machine shuts itself down after 10 minutes with no touch or check, so the page touches on every
 // interaction while Lean is up, and notices (through a slow status poll) when it has gone to sleep.
@@ -13,14 +16,30 @@ const WATCH_MS = 60000;        // while ready: has it gone to sleep?
 const TOUCH_MS = 60000;        // at most one touch a minute
 const GIVE_UP_MS = 20 * 60000; // a first boot builds Lean (~10 min); past this, say something's wrong
 
-export function createLean({ fetch = globalThis.fetch.bind(globalThis), base = '/api/lean', onChange = () => {},
+export function createLean({ fetch = globalThis.fetch ? globalThis.fetch.bind(globalThis) : null, base = '/api/lean', onChange = () => {},
   setTimeout = globalThis.setTimeout, clearTimeout = globalThis.clearTimeout, now = Date.now } = {}) {
   let status = { state: 'asleep' };
   let timer = null;
   let lastTouch = 0;
   let wokeAt = 0;
+  const listeners = new Set([onChange]);
+  const notify = () => listeners.forEach((fn) => fn(status, live));
 
-  const set = (s) => { status = s; onChange(s); };
+  // The live proof, as the Lean tab shows it
+  let level = null;          // { start, goal }
+  let history = [];          // finished moves: { from, to, hint }
+  let live = { state: 'idle', theorem: '', steps: [], goals: [], error: null, done: false, verified: null };
+  let sid = null;
+  let sent = 0;              // how many of history Lean has seen
+  let queue = Promise.resolve();
+  const setLive = (patch) => { live = Object.assign({}, live, patch); notify(); };
+
+  const set = (s) => {
+    const wasReady = status.state === 'ready';
+    status = s; notify();
+    if (s.state === 'ready' && !wasReady) beginLive();
+    if (s.state !== 'ready' && wasReady) { sid = null; setLive({ state: 'idle' }); }
+  };
 
   async function call(method, path, body) {
     let r;
@@ -81,5 +100,45 @@ export function createLean({ fetch = globalThis.fetch.bind(globalThis), base = '
     return call('POST', '/check', { lhs, rhs, rule });
   }
 
-  return { wake, touch, check, poll, get status() { return status; }, stop: () => clearTimeout(timer) };
+  // Start the live proof from the level's start, then send every move made so far, one at a time
+  function beginLive() {
+    if (!level) return;
+    sid = null; sent = 0;
+    setLive({ state: 'starting', theorem: '', steps: [], goals: [], error: null, done: false, verified: null });
+    queue = queue.then(async () => {
+      lastTouch = now();
+      const r = await call('POST', '/check', { session: 'start', start: level.start, goal: level.goal });
+      if (!r.ok || !r.sid) { setLive({ state: 'error', error: r.error || r.detail || 'Lean couldn’t start the proof' }); return; }
+      sid = r.sid;
+      setLive({ state: 'live', theorem: r.theorem, goals: r.goals || [] });
+      await flush();
+    });
+  }
+
+  async function flush() {
+    while (sid && sent < history.length) {
+      const m = history[sent++];
+      if (!m.from || !m.to) { setLive({ steps: live.steps.concat([{ ok: false, hint: m.hint, error: 'This position can’t be written in Lean yet' }]) }); continue; }
+      lastTouch = now();
+      const r = await call('POST', '/check', { session: 'step', sid, from: m.from, to: m.to, hint: m.hint || [] });
+      if (r.state === 'asleep' || r.state === 'booting') { sent--; return; }
+      if (r.error && /session ended/.test(r.error)) { beginLive(); return; }
+      const stepRow = { ok: !!r.ok, hint: m.hint, error: r.ok ? null : r.error };
+      if (r.ok) setLive({ steps: live.steps.concat([stepRow]), goals: r.goals || [], done: !!r.done, verified: r.done ? !!r.verified : null, error: null });
+      else setLive({ steps: live.steps.concat([stepRow]), error: r.error });
+    }
+  }
+
+  function setLevel(start, goal) {
+    level = { start, goal }; history = [];
+    if (status.state === 'ready') beginLive();
+  }
+
+  function boardChanged(from, to, hint) {
+    history.push({ from, to, hint });
+    if (sid) queue = queue.then(flush);
+  }
+
+  return { wake, touch, check, poll, setLevel, boardChanged, subscribe: (fn) => { listeners.add(fn); return () => listeners.delete(fn); },
+    get status() { return status; }, get live() { return live; }, stop: () => clearTimeout(timer) };
 }

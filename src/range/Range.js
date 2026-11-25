@@ -72,7 +72,55 @@ export class Range extends Component {
       ]
     };
   }
+  // The board as a tree for the Lean server (server/render.py), in reading order; null where Lean can't write it yet
+  // (½, 𝑖, a vector without a one-letter name)
+  leanTree(n) {
+    if (n.t === 's') { const v = String(n.val); return /^-?\d+$/.test(v) ? { n: parseInt(v, 10) } : null; }
+    if (n.t === 'v') {
+      if (n.key === 'zero') return { zero: true };
+      if (!/^[a-z]$/.test(n.key || '')) return null;
+      return n.neg ? { neg: { v: n.key } } : { v: n.key };
+    }
+    if (n.t === 'prod') {
+      const fs = n.factors.map(f => this.leanTree(f)); if (fs.some(x => !x)) return null;
+      const sc = fs.length === 1 ? fs[0] : fs.length ? { mul: fs } : null;
+      if (!n.vec) return sc;
+      const v = this.leanTree(n.vec); if (!v) return null;
+      return sc ? { smul: [sc, v] } : v;
+    }
+    return this.leanSum(n.terms.map(t => t.node));
+  }
+  leanSum(nodes) {
+    const ts = this.readingOrder(nodes).map(x => this.leanTree(x));
+    if (!ts.length || ts.some(x => !x)) return null;
+    return ts.length === 1 ? ts[0] : { add: ts };
+  }
+  readingOrder(ns) {
+    const pos = n => this.P.get(n.id) || { x: 0, y: 0 };
+    return ns.slice().sort((a, b) => Math.abs(pos(a).y - pos(b).y) > 60 ? pos(a).y - pos(b).y : pos(a).x - pos(b).x);
+  }
+  zoneTree() { return this.leanSum(this.state.tops.filter(t => this.zoneIds.indexOf(t.node.id) >= 0).map(t => t.node)); }
+  // After each finished move (nothing being dragged), if the expression changed, tell the live proof
+  noteBoard() {
+    const L = this.props.lean; if (!L || this.props.legacy || !this.zoneIds) return;
+    if (this.drag || this.pdrag || this.idrag) return;
+    const t = this.zoneTree(); const key = JSON.stringify(t);
+    if (key === this._leanKey) { this._hint = null; return; }
+    const from = this._leanTree; this._leanKey = key; this._leanTree = t;
+    L.boardChanged(from, t, this._hint || null);
+    this._hint = null;
+  }
+  componentDidUpdate() { this.noteBoard(); }
+  // The level's live proof starts from the board as it is now (its start) toward the goal
+  initLean() {
+    const L = this.props.lean;
+    if (!L || this.props.legacy) return;
+    this._leanTree = this.zoneTree(); this._leanKey = JSON.stringify(this._leanTree);
+    L.setLevel(this._leanTree, this.leanTree(this.state.goal));
+    this._unsub = L.subscribe((status, live) => this.setState({ leanStatus: status, leanLive: live }));
+  }
   componentDidMount() {
+    this.initLean();
     this._rs = () => { if (this.board) { const r = this.board.getBoundingClientRect(); this.setState({ bw: r.width, bh: r.height }); } };
     this._rs();
     window.addEventListener('resize', this._rs);
@@ -97,6 +145,7 @@ export class Range extends Component {
     window.addEventListener('pointercancel', this._up);
   }
   componentWillUnmount() {
+    if (this._unsub) this._unsub();
     window.removeEventListener('resize', this._rs);
     window.removeEventListener('pointermove', this._mv);
     window.removeEventListener('pointerup', this._up);
@@ -588,7 +637,7 @@ export class Range extends Component {
     if (this.state.zeroHover) this.setState({ zeroHover: null });
     if (d.zeroHover && (d.absorb ? this.absorbZero(d) : this.dropZero(d))) return;
     if (d.rules && d.preview) { this.applyPreview(d); return; }
-    if (d.mode === 'reorder') { this.setState({ override: null, dragIds: null, preview: null }); return; }
+    if (d.mode === 'reorder') { this._hint = ['mul_comm']; this.setState({ override: null, dragIds: null, preview: null }); return; }
     if (d.mode === 'move') { this.setState({ dragIds: null, preview: null }); return; }
     this.dropSand(d);
   }
@@ -701,6 +750,7 @@ export class Range extends Component {
   }
   applyPreview(d) {
     const pv = d.preview; const tops = this.clone(d.orig);
+    this._hint = pv.type === 'expandV' || pv.type === 'collectV' ? ['add_smul'] : ['smul_add', 'mul_add', 'add_mul'];
     if (pv.type === 'expandV') {
       const loc = this.locate(tops, pv.pid); const P = loc.node;
       const G = P.factors[P.factors.length - 1]; const v = P.vec;
@@ -950,6 +1000,7 @@ export class Range extends Component {
         this.setRef(tops, sl, S.terms[0].node);
       }
     } else tops.splice(loc.ti, 1);
+    this._hint = ['add_zero'];
     this.setState({ tops: this.normTops(tops), dragIds: null, preview: null, override: null });
     this.flash(at, name + ' + 0 = ' + name + ' · additive identity', 'ok');
     return true;
@@ -962,6 +1013,7 @@ export class Range extends Component {
     const tgt = this.locate(tops, d.zeroHover.id); if (!tgt) return false;
     const at = this.P.get(d.zeroHover.id);
     const z = this.addZero(tops, d.zeroHover.id, from.node); if (!z) return false;
+    this._hint = ['add_zero'];
     this.setState({ tops: this.normTops(tops), dragIds: null, preview: null, override: null, slide: { id: z.id, x: from.x, y: from.y } });
     clearTimeout(this._st);
     this._st = setTimeout(() => this.setState({ slide: null }), 450);
@@ -976,8 +1028,7 @@ export class Range extends Component {
   // The same, as tokens {t, id}: each piece of text knows the node it came from (brackets, + and · belong to their
   // sum or product), so the readout can light up the part of the expression being moved.
   exprTokens(nodes, top) {
-    const pos = n => this.P.get(n.id) || { x: 0, y: 0 };
-    const order = ns => ns.slice().sort((a, b) => Math.abs(pos(a).y - pos(b).y) > 60 ? pos(a).y - pos(b).y : pos(a).x - pos(b).x);
+    const order = ns => this.readingOrder(ns);
     const join = (lists, sep, id) => lists.reduce((out, l, i) => out.concat(i ? [{ t: sep, id: id }] : [], l), []);
     const one = n => {
       if (n.t === 's' || n.t === 'v') return [{ t: this.elText(n), id: n.id }];
@@ -1083,6 +1134,7 @@ export class Range extends Component {
     const at = this.P.get(hit.id);
     const r = this.splitZero(tops, hit.id, d.node); if (!r) return;
     const slides = {}; slides[r.a.id] = { x: d.x, y: d.y, top: true }; slides[r.b.id] = { x: d.x, y: d.y };
+    this._hint = ['add_neg_cancel'];
     this.setState({ tops: this.normTops(tops), slides: slides });
     clearTimeout(this._ss);
     this._ss = setTimeout(() => this.setState({ slides: {} }), 650);
@@ -1147,6 +1199,7 @@ export class Range extends Component {
       if (!hit) return;
       const at = this.P.get(hit.id); const tgt = this.locate(tops, hit.id).node;
       const z = this.addZero(tops, hit.id); if (!z) return;
+      this._hint = ['add_zero'];
       this.setState({ tops: this.normTops(tops), slide: { id: z.id, x: pc.x, y: pc.y } });
       clearTimeout(this._st);
       this._st = setTimeout(() => this.setState({ slide: null }), 450);
@@ -1255,7 +1308,8 @@ export class Range extends Component {
       .concat((St.trayItems || []).map(it => Object.assign(this.tileOf(it.node, 0, 0), { start: itemStart(it), id: it.id })));
     let x = 22, y = 64, rows = 1;
     entries.forEach(en => { if (x > 22 && x + en.w > 528 - 18) { x = 22; y += 104; rows++; } en.px = x; en.py = y; x += en.w + 14; });
-    const H = 64 + rows * 104 + 40, bottom = 84; const top = (St.bh || 716) / this.fitScale() - bottom - H;
+    const bottom = 84; const H = (St.trayTab === 'lean') ? Math.min(560, (St.bh || 716) / this.fitScale() - bottom - 140) : 64 + rows * 104 + 40;
+    const top = (St.bh || 716) / this.fitScale() - bottom - H;
     const tiles = entries.map(en => {
       const fresh = en.id && St.trayNew && St.trayNew[en.id] != null;
       return Object.assign({}, en.t, { x: en.px, y: en.py, z: 1, scale: 1, shadow: 7,
@@ -1264,7 +1318,7 @@ export class Range extends Component {
     });
     const dragging = (this.pdrag && this.pdrag.moved) || (this.idrag && this.idrag.moved);
     return {
-      open: !!St.trayOpen, show: !!St.trayOpen && !dragging, tab: St.trayTab || 'tray', top: top, h: H,
+      open: !!St.trayOpen, show: !!St.trayOpen && !dragging, tab: St.trayTab || 'tray', top: top, h: H, lean: this.leanVals(),
       list: tiles.map((t, i) => ({ kind: entries[i].kind, t: t })), tiles: { hex: tiles[0], vec: tiles[1] }, captionY: H - 34,
       toggle: () => this.setState({ trayOpen: !this.state.trayOpen }),
       pick: tab => () => this.setState({ trayTab: tab })
@@ -1318,6 +1372,18 @@ export class Range extends Component {
     if (n.t === 'sum') return [['(']].concat(...n.terms.map((t, i) => (i ? [[' + ']] : []).concat(this.nodeTokens(t.node))), [[')']]);
     return [].concat(...n.factors.map((f, i) => (i ? [['·']] : []).concat(this.nodeTokens(f))), n.vec ? this.nodeTokens(n.vec) : []);
   }
+  // What the Lean tab shows: the machine's status, then the live proof as Lean sees it
+  leanVals() {
+    const st = this.state.leanStatus || { state: this.props.lean ? 'asleep' : 'offline' };
+    const live = this.state.leanLive || { state: 'idle', steps: [], goals: [] };
+    const words = { asleep: 'Lean is asleep. Press Play (top left) to start it; your moves so far will be replayed.', starting: 'Starting the Lean machine…',
+      booting: st.detail || 'Lean is starting…', capped: st.detail || 'Lean has started too often today.', off: 'The Lean machine is switched off.',
+      offline: st.detail || 'Lean isn’t reachable.', error: st.detail || 'Lean had a problem.' };
+    return {
+      status: st.state === 'ready' ? (live.state === 'starting' ? 'Opening the proof…' : live.state === 'error' ? 'Lean: ' + live.error : 'Lean is running this proof live') : words[st.state] || st.state,
+      ready: st.state === 'ready', live: live
+    };
+  }
   // The dotted box around the expression: it hugs the expression's tiles (growing and shrinking as they move, so it
   // shows when part of the expression is off screen) and always holds the EXPRESSION heading and the readout under it.
   zoneBox(readout) {
@@ -1353,6 +1419,30 @@ export class Range extends Component {
             <span style=${`position: absolute; left: 0; right: 0; top: 14px; height: 30px; box-sizing: border-box; display: flex; align-items: center; justify-content: center; padding-left: ${k.on ? k.padL : 0}px; color: ${k.on ? k.fg : 'inherit'}; transition: padding 0.35s ease, color 0.3s ease; z-index: 1`}>${k.t}</span>
           </span>`)}
       </div>
+    </div>`;
+  }
+  // The Lean tab: a watch window on the live proof. The theorem as Lean has it, each board move as a step (✓ when Lean
+  // accepted it, ✗ with Lean's error when not), and the goal as Lean prints it; at the end, Lean's "No goals" and
+  // whether the whole proof compiled from scratch.
+  leanHtml(L) {
+    const mono = "font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 14px; line-height: 20px; white-space: pre-wrap; word-break: break-word";
+    const live = L.live; const goals = live.goals || [];
+    return html`
+    <div style="position: absolute; left: 0; right: 0; top: 64px; bottom: 0; overflow: auto; padding: 0 22px 18px; box-sizing: border-box">
+      <div style=${`display: flex; align-items: center; gap: 10px; font-size: 15px; color: ${live.state === 'error' ? '#FCA5A5' : '#CBD5E1'}`}>
+        <span style=${`width: 10px; height: 10px; border-radius: 5px; flex: 0 0 auto; background: ${L.ready ? '#34D399' : '#94A3B8'}`}></span>${L.status}
+      </div>
+      ${live.theorem ? html`<div style=${`${mono}; margin-top: 12px; color: #94A3B8`}>${live.theorem}</div>` : null}
+      ${live.steps && live.steps.length ? html`<div style="margin-top: 10px; display: flex; flex-direction: column; gap: 4px">
+        ${live.steps.map((st, i) => html`<div style=${`${mono}; color: ${st.ok ? '#A7F3D0' : '#FCA5A5'}`}>${(i + 1) + '  ' + (st.ok ? '✓ ' : '✗ ') + ((st.hint && st.hint[0]) || 'rearrange') + (st.error ? '\n   ' + st.error : '')}</div>`)}
+      </div>` : null}
+      ${live.state === 'live' ? html`
+        <div style=${`margin-top: 14px; padding: 12px 14px; border-radius: 12px; background: rgba(0,0,0,0.25); border: 1.5px solid ${live.done ? '#34D399' : 'rgba(255,255,255,0.12)'}`}>
+          ${live.done ? html`
+            <div style="font-size: 17px; font-weight: 700; color: #6EE7B7">No goals</div>
+            <div style=${`margin-top: 6px; font-size: 14px; color: ${live.verified ? '#A7F3D0' : '#FCA5A5'}`}>${live.verified ? 'Lean checked the whole proof from scratch ✓' : 'The steps closed the goal, but the whole proof didn’t compile'}</div>
+          ` : goals.map(g => html`<div style=${`${mono}; color: #E2E8F0`}>${g}</div>`)}
+        </div>` : null}
     </div>`;
   }
   /* ---------- render ---------- */
@@ -1601,7 +1691,7 @@ export class Range extends Component {
             <div style=${`position: absolute; left: 22px; right: 20px; top: ${v.tray.captionY}px; font-size: 14px; line-height: 19px; color: #94A3B8`}>Tap a tile on the board to bring it and its inverse here · drag a 0 onto a term to add + 0 · drag a tile onto a matching 0 to split the 0</div>
           </div>
         ` : html`
-          <div style="padding: 40px 24px; font-size: 17px; color: #94A3B8">Nothing here yet.</div>
+          ${this.leanHtml(v.tray.lean)}
         `}
       </div>
     ` : null}

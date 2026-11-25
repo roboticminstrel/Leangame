@@ -51,6 +51,11 @@ protected theorem neg_unique {v w : V} (h : v + w = 0) : w = -v :=
 protected theorem neg_neg (v : V) : -(-v) = v :=
   (AddLaws.neg_unique (AddLaws.neg_add_cancel v)).symm
 
+/-- `+` on vectors is associative and commutative, registered so Lean's `ac_rfl` can prove that two sums are the same
+terms in a different order or grouping: the board's rearranging moves. -/
+instance assoc : Std.Associative (α := V) (· + ·) := ⟨AddLaws.add_assoc⟩
+instance comm : Std.Commutative (α := V) (· + ·) := ⟨AddLaws.add_comm⟩
+
 /-- The cancellation step that 1.30 and 1.31 share: a vector equal to its own double is `0`.
 `x = x + 0 = x + (x + -x) = (x + x) + -x = x + -x = 0`. -/
 protected theorem eq_zero_of_add_self {x : V} (h : x + x = x) : x = 0 :=

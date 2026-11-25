@@ -60,5 +60,29 @@ class Render(unittest.TestCase):
         self.assertNotIn("eval", cmd)
 
 
+class Live(unittest.TestCase):
+    def test_theorem(self):
+        t = render.theorem({"smul": [{"n": 0}, v]}, {"zero": True})
+        self.assertTrue(t.startswith("theorem level1 {F V : Type}"))
+        self.assertIn("(v : V) :\n    ((0 : F) • v) = (0 : V) := by", t)
+        with self.assertRaises(render.BadInput):
+            render.theorem(a, v)
+        with self.assertRaises(render.BadInput):
+            render.theorem(a, b, name="x; #eval")
+
+    def test_step(self):
+        tac = render.step({"add": [u, {"zero": True}]}, u, ["add_zero"])
+        self.assertTrue(tac.startswith("refine Eq.trans (show (u + (0 : V)) = u by first | ac_rfl | (rw [Axler.AddLaws.add_zero]; done)"))
+        self.assertTrue(tac.endswith(") ?_ <;> try with_reducible rfl"))
+        self.assertIn("(nth_rw 2 [← Axler.VectorSpace.add_smul]; ac_rfl)", tac)  # every rule, after the hint
+        self.assertNotIn("#", tac)
+        with self.assertRaises(render.BadInput):
+            render.step(a, v)
+        self.assertNotIn("sorry", render.step(u, u, ["sorry"]))  # unknown hints are dropped
+
+    def test_auto(self):
+        self.assertIn("| ac_rfl", render.move({"add": [u, v]}, {"add": [v, u]}, "auto"))
+
+
 if __name__ == "__main__":
     unittest.main()
