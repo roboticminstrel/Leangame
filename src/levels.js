@@ -53,5 +53,8 @@ export function browserStore() {
 }
 export function progressFrom(store) {
   const d = store.load() || {};
-  return { done: Array.isArray(d.done) ? d.done : START_DONE.slice(), current: LEVELS[d.current] ? d.current : FIRST, places: d.places || {} };
+  let done = Array.isArray(d.done) ? d.done : START_DONE.slice();
+  // progress saved before 1.27 had a level started with it marked done, unearned: take that back (once)
+  if (!d.v || d.v < 2) done = done.filter(id => id !== '1.27');
+  return { v: 2, done: done, current: LEVELS[d.current] ? d.current : FIRST, places: d.places || {} };
 }

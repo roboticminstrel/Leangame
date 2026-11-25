@@ -1807,10 +1807,11 @@ export class Range extends Component {
   treeTap(id) {
     const before = this.treeVals(this.state.tree.root);
     const t = this.clone(this.state.tree); const n = this.treeFind(t.root, id); if (!n) return;
-    const vecCycle = () => { // plain → −(…) (once 1.27 is won) → ∃𝑤 → plain
-      if (!n.neg && !n.wit) { if (this.has127()) n.neg = true; else n.wit = true; }
-      else if (n.neg) { delete n.neg; n.wit = true; }
-      else delete n.wit;
+    // a toggle: before 1.27 the existence bubble (∃𝑤), after it the minus that replaces it (that's what 1.27 buys)
+    const vecCycle = () => {
+      const k = this.has127() ? 'neg' : 'wit';
+      delete n[k === 'neg' ? 'wit' : 'neg'];
+      if (n[k]) delete n[k]; else n[k] = true;
     };
     if (n.t === 's') { if (n.val === '0') return; const neg = String(n.val).charAt(0) === '-'; n.val = neg ? String(n.val).slice(1) : '-' + n.val; n.el = neg ? n.el.replace(/^−/, '') : '−' + n.el; }
     else if (n.t === 'v') { if (n.key === 'zero') return; vecCycle(); }

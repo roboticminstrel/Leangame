@@ -542,7 +542,7 @@ const tapTree = (c, which) => { treeItem(c, which).down(ev(0, 0)); c.iend(); c.r
 
 // level 1, as it ships
 // (with 1.27 won, so the tree offers −(…) for vectors; fresh progress gets the inverse axiom's ∃𝑤 instead)
-const makeLevel = () => makeLive({ store: memoryStore({ done: DONE0.concat(['1.27']) }) });
+const makeLevel = () => makeLive({ store: memoryStore({ v: 2, done: DONE0.concat(['1.27']) }) });
 const makeFresh = () => makeLive({ store: memoryStore() });
 const tap = (c, id) => { c.renderVals(); c.begin(id, 'self', ev(0, 0)); c.end(); c.renderVals(); };
 function dragItem(c, n, tx, ty) {
@@ -602,19 +602,15 @@ test('tree: tapping a leaf makes it a night tile (in the tree only); tapping a v
   tapTree(c, '𝑣');
   assert.ok(treeItem(c, '−𝑣'), 'the leaf is now −𝑣');
   assert.deepEqual(readout(c), ['0𝑣'], 'the board is unchanged');
-  tapTree(c, '−𝑣');                                   // → ∃𝑤 on the leaf
-  assert.deepEqual(c.renderVals().tray.tree.wraps.map(w => w.kind), ['wit']);
-  tapTree(c, '𝑣');                                    // → plain again
+  tapTree(c, '−𝑣');                                   // → plain again (after 1.27, − replaces the existence form)
+  assert.ok(treeItem(c, '𝑣') && c.renderVals().tray.tree.wraps.length === 0);
   tapTree(c, '·');
   let T = c.renderVals().tray.tree;
   assert.deepEqual(T.wraps.map(w => w.kind), ['neg']);
   assert.ok(T.boxes[0].neg, 'a night box around the subtree');
   tapTree(c, '·');
   T = c.renderVals().tray.tree;
-  assert.deepEqual(T.wraps.map(w => w.kind), ['wit'], 'then the inverse axiom (∃𝑤)');
-  tapTree(c, '·');
-  T = c.renderVals().tray.tree;
-  assert.equal(T.wraps.length, 0);
+  assert.equal(T.wraps.length, 0, 'a toggle: − and back, no existence form once 1.27 is won');
   assert.deepEqual(T.leaving.map(l => l.wrap ? 'wrap' : 'box').sort(), ['box', 'wrap'], 'they pop out');
 });
 
@@ -693,7 +689,7 @@ test('reaching the goal plays the win: the expression is exactly 0 in 𝑉', () 
 test('the live proof: the board is sent as Lean trees, one finished move at a time, with the law it used', () => {
   const calls = [];
   const lean = { setLevel: (s, g) => calls.push(['level', s, g]), boardChanged: (f, t, h) => calls.push(['move', f, t, h]), subscribe: () => () => {} };
-  const c = makeLive({ lean, store: memoryStore({ done: DONE0.concat(['1.27']) }) });
+  const c = makeLive({ lean, store: memoryStore({ v: 2, done: DONE0.concat(['1.27']) }) });
   c.initLean();
   assert.deepEqual(calls[0], ['level', { smul: [{ n: 0 }, { v: 'v' }] }, { zero: true }]);
   dragPiece(c, 'PZ', ...centre(c, c.state.tops[0].node.vec.id));   // 0𝑣 + 0
@@ -942,7 +938,7 @@ test('winning marks the node done; levels keep their place when you switch away 
 });
 
 test('level 1.32 can be won with 1.30 unlocked: (−1)𝑣 → … → −𝑣', () => {
-  const store = freshStore({ done: levelsMod.START_DONE.concat(['1.27', '1.30']), current: '1.32', places: {} });
+  const store = freshStore({ v: 2, done: levelsMod.START_DONE.concat(['1.27', '1.30']), current: '1.32', places: {} });
   const c = makeLive({ store }); after(c);
   assert.deepEqual(readout(c), ['−1𝑣']);
   const T = c.state.tops[0].node;
@@ -1208,4 +1204,14 @@ test('a hypothesis dragged from ASSUMPTIONS rewrites like its card', () => {
   assert.equal(c.state.zeroHover && c.state.zeroHover.id, z.id);
   c.hend(); after(c);
   assert.deepEqual(readout(c), ['𝑤 + 𝑣 + 𝑤′']);
+});
+
+test('progress saved before 1.27 had a level loses its unearned 1.27 once; later progress keeps it', () => {
+  const old = memoryStore({ done: DONE0.concat(['1.27', '1.30']), current: '1.30', places: {} });
+  const c = makeLive({ store: old }); c.renderVals();
+  assert.ok(!c.prog.done.includes('1.27') && c.prog.done.includes('1.30'));
+  assert.equal(c.has127(), false);
+  const won = memoryStore({ v: 2, done: DONE0.concat(['1.27']), current: '1.30', places: {} });
+  const c2 = makeLive({ store: won }); c2.renderVals();
+  assert.equal(c2.has127(), true);
 });
