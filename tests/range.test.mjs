@@ -853,7 +853,7 @@ test('the TOOLS tab fills the screen with the concept graph; its current node ta
   const done = new Set(START_DONE);
   assert.equal(nodeState('1.27', done, '1.30'), 'done'); assert.equal(nodeState('1.30', done, '1.30'), 'active');
   assert.equal(nodeState('1.33', done, '1.30'), 'next', 'one step away: shown grey');
-  assert.equal(nodeState('1.32', done, '1.30'), 'hidden', 'two steps away: not shown');
+  assert.equal(nodeState('1.32', done, '1.30'), 'partial', 'needs 1.30 too: shown with a dotted line, not playable');
   done.add('1.30');
   assert.equal(nodeState('1.32', done, '1.30'), 'next', 'once 1.30 is done, 1.32 is one step away');
   assert.equal(NODES.length, 20);
@@ -969,4 +969,21 @@ test('0𝑣 = 0 is not a move inside level 1.30 itself', () => {
   const P = c.state.tops[0].node;
   dragTo(c, P.factors[0].id, ...centre(c, P.vec.id)); after(c);
   assert.deepEqual(readout(c), ['0𝑣']);
+});
+
+test('graph: a node with some prerequisites done shows (dotted from the missing ones); tapping it pulses what is missing', async () => {
+  const { nodeState, ConceptGraph } = await import('../src/graph/ConceptGraph.js');
+  const done = new Set(levelsMod.START_DONE);
+  assert.equal(nodeState('1.32', done, '1.30'), 'partial', '1.27 done, 1.30 being played: shown, not playable');
+  assert.equal(nodeState('1.34', done, '1.30'), 'hidden', 'its missing prerequisites are not on screen');
+  const g = new ConceptGraph({ done: [...done], active: '1.30', levels: ['1.30', '1.32'] });
+  g.setState = function (o) { Object.assign(this.state, o); };
+  const n32 = (await import('../src/graph/data.js')).NODES.find(n => n.id === '1.32');
+  g.tap(n32, ['1.30']);
+  assert.equal(g.state.sel, null, 'no sheet');
+  assert.deepEqual(g.state.pulse.missing, ['1.30']);
+  assert.equal(g.state.pulse.to, '1.32');
+  done.add('1.30');
+  assert.equal(nodeState('1.32', done, '1.32'), 'active');
+  assert.equal(nodeState('1.32', done, '1.30'), 'next');
 });

@@ -68,3 +68,11 @@ button { font-family: inherit; }
 @keyframes glowSpin {
   to { --glowA: 360deg; }
 }
+@keyframes edgePulse {
+  0%, 100% { stroke: #CBD5E1; stroke-width: 1.5; }
+  50% { stroke: #F59E0B; stroke-width: 4; }
+}
+@keyframes nodePulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(245,158,11,0); scale: 1; }
+  50% { box-shadow: 0 0 0 6px rgba(245,158,11,0.55); scale: 1.06; }
+}
