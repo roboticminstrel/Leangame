@@ -914,6 +914,22 @@ export class Range extends Component {
     const parts = order(nodes).map(one);
     return top ? parts.join(' + ') : '(' + parts.join(' + ') + ')';
   }
+  // If any term of the expression sticks out past the board's right edge, lay the terms out again in rows, in
+  // reading order (the order exprText writes them), wrapping like text, so nothing ends up off screen.
+  reflowZone(tops) {
+    const K = this.K;
+    const inZone = t => { const m = this.measure(t.node); const cy = t.y + m.h / 2; return cy > K.ZT && cy < K.ZB; };
+    const items = tops.filter(inZone);
+    if (!items.some(t => t.x + this.measure(t.node).w > K.WW - 8)) return;
+    const cy = t => t.y + this.measure(t.node).h / 2;
+    items.sort((a, b) => Math.abs(cy(a) - cy(b)) > 60 ? cy(a) - cy(b) : a.x - b.x);
+    let x = 24, y = K.ZT + 30, rowH = 0;
+    items.forEach(t => {
+      const m = this.measure(t.node);
+      if (x > 24 && x + m.w > K.WW - 16) { x = 24; y += rowH + 30; rowH = 0; }
+      t.x = x; t.y = y; x += m.w + K.GAP; rowH = Math.max(rowH, m.h);
+    });
+  }
   // a short text form of a term, for messages: −1·𝑣, (2 + 3)·𝑣
   label(n) {
     if (n.t === 's' || n.t === 'v') return this.elText(n);
@@ -943,7 +959,7 @@ export class Range extends Component {
       list.splice(list.indexOf(t) + 1, 0, { node: z, x: t.x + m.w + K.GAP, y: t.y + m.h / 2 - 44 });
     };
     if (loc.kind === 'term') { beside(loc.parent.terms, loc.parent.terms[loc.idx], () => true); return z; }
-    if (loc.kind === 'top' && this.zoneIds.indexOf(X.id) >= 0) { beside(tops, tops[loc.ti], u => this.zoneIds.indexOf(u.node.id) >= 0); return z; }
+    if (loc.kind === 'top' && this.zoneIds.indexOf(X.id) >= 0) { beside(tops, tops[loc.ti], u => this.zoneIds.indexOf(u.node.id) >= 0); this.reflowZone(tops); return z; }
     const S = this.mkSum([{ node: X, x: 0, y: 0 }, { node: z, x: m.w + K.GAP, y: m.h / 2 - 44 }]);
     if (loc.kind === 'top') {
       const t = tops[loc.ti];
