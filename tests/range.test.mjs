@@ -502,7 +502,8 @@ test('tray popup: opens with two tabs; a 0 dragged out of it lands on the board,
   c.pend(); v = c.renderVals();
   assert.deepEqual(readout(c), ['(2 + 3)𝑣 + −1𝑣 + 0']);
   assert.equal(v.tray.show, true, 'back after the drop');
-  v.tray.toggle(); assert.equal(c.renderVals().tray.open, false);
+  v.tray.toggle();
+  assert.equal(c.renderVals().tray.closing, true, 'slides down first');
 });
 
 test('the expression box hugs its tiles and always holds the heading and readout', () => {

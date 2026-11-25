@@ -1628,7 +1628,14 @@ export class Range extends Component {
     return {
       open: !!St.trayOpen, show: !!St.trayOpen && !dragging, tab: St.trayTab || 'tray', top: top, h: H, lean: this.leanVals(),
       list: tiles.map((t, i) => ({ kind: entries[i].kind, t: t })), tiles: { hex: tiles[0], vec: tiles[1], one: po ? tiles[2] : null }, captionY: H - 34, tree: tree,
-      toggle: () => this.setState({ trayOpen: !this.state.trayOpen }),
+      closing: !!St.trayClosing,
+      // open: the panel slides up; close: it slides back down first
+      toggle: () => {
+        if (!this.state.trayOpen) { clearTimeout(this._tc); this.setState({ trayOpen: true, trayClosing: false }); return; }
+        this.setState({ trayClosing: true });
+        clearTimeout(this._tc);
+        this._tc = setTimeout(() => this.setState({ trayOpen: false, trayClosing: false }), 220);
+      },
       pick: tab => () => this.setState({ trayTab: tab })
     };
   }
@@ -2026,7 +2033,8 @@ export class Range extends Component {
       <button onClick=${v.tray.toggle} aria-label="Open the tray" style="position: absolute; left: 18px; bottom: 108px; height: 60px; padding: 0 22px; border-radius: 30px; border: 1.5px solid rgba(203,213,225,0.45); background: rgba(27,37,58,0.94); color: #E2E8F0; font-family: Inter, system-ui, sans-serif; font-size: 20px; font-weight: 600; cursor: pointer; pointer-events: auto">Tray</button>
     ` : null}
     ${v.tray && v.tray.show ? html`
-      <div role="dialog" aria-label="Tray" style=${`position: absolute; left: 16px; top: ${v.tray.top}px; width: 528px; height: ${v.tray.h}px; box-sizing: border-box; border-radius: 22px; background: rgba(27,37,58,0.98); border: 1.5px solid rgba(255,255,255,0.14); box-shadow: 0 10px 30px rgba(0,0,0,0.5); pointer-events: auto; z-index: 1000; font-family: Inter, system-ui, sans-serif`}>
+      <div role="dialog" aria-label="Tray" style=${`position: absolute; left: 16px; top: ${v.tray.top}px; width: 528px; height: ${v.tray.h}px; box-sizing: border-box; border-radius: 22px; background: rgba(27,37,58,0.98); border: 1.5px solid rgba(255,255,255,0.14); box-shadow: 0 10px 30px rgba(0,0,0,0.5); pointer-events: auto; z-index: 1000; font-family: Inter, system-ui, sans-serif; overflow: hidden;
+        transition: top 0.22s cubic-bezier(0.3, 0.9, 0.4, 1), height 0.22s cubic-bezier(0.3, 0.9, 0.4, 1); animation: ${v.tray.closing ? 'trayDown 0.22s ease-in both' : 'trayUp 0.28s cubic-bezier(0.2, 0.9, 0.3, 1) both'}`}>
         <div style="display: flex; align-items: center; gap: 8px; padding: 12px 12px 0 14px">
           ${['tray', 'lean'].map(tab => html`
             <button onClick=${v.tray.pick(tab)} aria-pressed=${v.tray.tab === tab ? 'true' : 'false'} style=${`height: 42px; padding: 0 18px; border-radius: 21px; border: 1.5px solid ${v.tray.tab === tab ? '#F2B33D' : 'rgba(203,213,225,0.3)'}; background: ${v.tray.tab === tab ? 'rgba(242,179,61,0.16)' : 'transparent'}; color: ${v.tray.tab === tab ? '#F2B33D' : '#CBD5E1'}; font: inherit; font-size: 17px; font-weight: 700; letter-spacing: 0.06em; cursor: pointer`}>${tab === 'tray' ? 'TRAY' : 'LEAN'}</button>
