@@ -1853,7 +1853,7 @@ export class Range extends Component {
       if (q || this.flagged(n) || n.wit) out.edges.push({ x1: p.cx, y1: p.top, x2: q ? q.cx : p.cx, y2: y2 });
       if (n.wit) {
         const x2 = q ? q.cx : p.cx;
-        out.wraps.push({ key: n.id + ':wit', kind: 'wit', op: n.id, x: p.cx + (x2 - p.cx) / 2 - 64, y: p.top + (y2 - p.top) / 2 - 16 });
+        out.wraps.push({ key: n.id + ':wit', kind: 'wit', op: n.id, x: p.cx + (x2 - p.cx) / 2 - 104, y: p.top + (y2 - p.top) / 2 - 16 });
         const ids = new Set(sub(n)); const ns = out.nodes.filter(m => ids.has(m.key));
         const x0 = Math.min(...ns.map(m => m.x)), x1 = Math.max(...ns.map(m => m.x + m.w)), y0 = Math.min(...ns.map(m => m.y)), y1 = Math.max(...ns.map(m => m.y + m.h));
         out.boxes.push({ key: n.id + ':box', x: x0 - 9, y: y0 - 9, w: x1 - x0 + 18, h: y1 - y0 + 18, wit: true });
@@ -2121,7 +2121,7 @@ export class Range extends Component {
   // subtrees; whatever was just removed pops out where it was.
   treeHtml(T) {
     const wrap = w => w.kind === 'wit'
-      ? html`<span style="position: relative; display: flex; align-items: center; justify-content: center; gap: 3px; width: 128px; height: 32px; box-sizing: border-box; border-radius: 16px; background: rgba(8,51,68,1); border: 2px solid #22D3EE; color: #CFFAFE; font-family: 'STIX Two Text', serif; font-size: 16px; white-space: nowrap">∃<i>w</i>, <span style="display: inline-block; width: 11px; height: 11px; border: 1.5px solid #67E8F9; border-radius: 2px"></span> + <i>w</i> = 0</span>`
+      ? html`<span style="display: flex; align-items: center; justify-content: center; width: 208px; height: 32px; box-sizing: border-box; border-radius: 16px; background: rgba(8,51,68,1); border: 2px solid #22D3EE; color: #CFFAFE; font-family: 'STIX Two Text', serif; font-size: 16px; white-space: pre">∀𝑣 : 𝑉, ∃𝑤 : 𝑉, 𝑣 + 𝑤 = 0</span>`
       : w.kind === 'neg'
       ? html`<span style=${`display: flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: 17px; background: ${w.night}; border: 1.5px solid rgba(255,255,255,0.35); color: #F8FAFC; font-size: 24px; font-weight: 600`}>−</span>`
       : html`<span style="display: flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: 17px; background: rgba(27,37,58,1); border: 2px solid #F2B33D; color: #FDE68A; font-family: 'STIX Two Text', serif; font-size: 19px"><i>x</i><sup style="font-size: 11px; margin-left: 1px; transform: translateY(-1px)">−1</sup></span>`;
