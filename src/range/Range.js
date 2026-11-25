@@ -2076,7 +2076,9 @@ export class Range extends Component {
     <div onClick=${h.toggle} role="button" aria-pressed=${h.on ? 'true' : 'false'} aria-label=${h.title + ': tap to show or hide the tiles'} style=${`position: absolute; left: 14px; top: ${h.y}px; padding: 0 14px; min-width: 260px; pointer-events: auto; cursor: pointer; z-index: 5`}>
       <div style=${`font-family: Inter, system-ui, sans-serif; font-size: 14px; font-weight: 700; letter-spacing: 0.12em; color: ${title}`}>${h.title}</div>
       ${h.rows.map((row, ri) => html`<div style=${`position: relative; height: 58px; margin-top: ${ri ? 0 : 10}px; display: flex; white-space: pre; font-family: 'STIX Two Text', 'Cambria Math', 'Times New Roman', serif; font-size: 24px; color: #E2E8F0`}>
-        ${row.map(k => !k.tile ? html`<span onPointerDown=${k.hyp ? this.hypDown(k.hyp, k.t) : null} style=${`flex: 0 0 auto; padding-top: 14px; height: 30px; line-height: 30px; ${k.hyp ? 'color: #BAE6FD; cursor: grab; touch-action: none' : ''}`}>${k.t}</span>` : html`
+        ${row.map(k => !k.tile ? html`<span onPointerDown=${k.hyp ? this.hypDown(k.hyp, k.t) : null} style=${k.hyp
+          ? 'flex: 0 0 auto; box-sizing: border-box; margin: 9px 3px 0; height: 40px; line-height: 37px; padding: 0 9px; border: 1.5px solid rgba(125,211,252,0.7); border-radius: 12px; background: rgba(14,116,144,0.22); color: #BAE6FD; cursor: grab; touch-action: none' // a card: it can be dragged
+          : 'flex: 0 0 auto; padding-top: 14px; height: 30px; line-height: 30px'}>${k.t}</span>` : html`
           <span style=${`position: relative; flex: 0 0 auto; height: 58px; width: ${k.width}px; transition: width 0.35s ease ${k.on ? '0s' : '0.2s'}`}>
             <span style=${`position: absolute; left: 0; top: 0; width: 100%; height: 100%; transform: scale(${k.on ? 1 : 0}); transform-origin: 50% 40%; transition: transform 0.32s cubic-bezier(0.2, 1.5, 0.4, 1) ${k.on ? '0.22s' : '0s'}; pointer-events: none`}>
               ${k.tile.kind === 'para' ? html`
