@@ -407,3 +407,39 @@ test('readout during a drag: the whole expression stays, the moving part glows; 
   assert.deepEqual(readout(c), ['(2 + 3 + −1)𝑣']);
   assert.ok(c.renderVals().results[0].segs.every(x => !x.hot), 'nothing glows once it is done');
 });
+
+test('factoring leaves out terms without the factor: (2 + 3)𝑣 + −1𝑣 + 0 → (2 + 3 + −1)𝑣 + 0', () => {
+  const c = makeLive();
+  dragPiece(c, 'PZ', ...centre(c, c.state.tops[1].node.vec.id));
+  assert.deepEqual(readout(c), ['(2 + 3)𝑣 + −1𝑣 + 0']);
+  const va = c.state.tops[1].node.vec, vb = c.state.tops[0].node.vec;
+  dragTo(c, va.id, ...centre(c, vb.id));
+  assert.deepEqual(readout(c), ['(2 + 3 + −1)𝑣 + 0']);
+  assert.equal(c.zoneValue, '= 4𝑣');
+});
+
+test('factoring a scalar: 2·0 has the 2 and groups in, a bare 0 stays out', () => {
+  const c = makeLive();
+  const V = () => c.mkV('𝑉', '𝑣', 'v', 'R', 140), Z = () => c.mkV('𝑉', '0', 'zero', 'R', 110), two = () => c.mkS('R', '2', '2');
+  c.setState({ tops: [
+    { node: c.mkProd([two()], V()), x: 24, y: 164 },
+    { node: c.mkProd([two()], Z()), x: 250, y: 164 },
+    { node: Z(), x: 24, y: 352 },
+  ] });
+  c.renderVals();
+  const a = c.state.tops[0].node.factors[0], b = c.state.tops[1].node.factors[0];
+  dragTo(c, a.id, ...centre(c, b.id));
+  assert.deepEqual(readout(c), ['2(𝑣 + 0) + 0']);
+});
+
+test('inside a bracket too: (2𝑣 + 3𝑣 + 0) groups the 𝑣 terms and keeps the 0 in the bracket', () => {
+  const c = makeLive();
+  const V = () => c.mkV('𝑉', '𝑣', 'v', 'R', 140), Z = () => c.mkV('𝑉', '0', 'zero', 'R', 110);
+  const S = c.mkSum([{ node: c.mkProd([c.mkS('R', '2', '2')], V()), x: 0, y: 0 }, { node: c.mkProd([c.mkS('R', '3', '3')], V()), x: 0, y: 0 }, { node: Z(), x: 0, y: 0 }]);
+  c.rowArrange(S);
+  c.setState({ tops: [{ node: c.mkProd([c.mkS('R', '½', '½')], S), x: 10, y: 600 }] });
+  c.renderVals();
+  dragTo(c, S.terms[1].node.vec.id, ...centre(c, S.terms[0].node.vec.id));
+  const top = c.state.tops[0].node;
+  assert.equal(show(top), '½·((2 + 3)·𝑣 + 0)');
+});

@@ -633,12 +633,14 @@ export class Range extends Component {
       for (const f of this.factorsOf(U)) if (this.sig(f) === gsig && this.inRect(this.P.get(f.id), cx, cy, 6)) hit = true;
     }
     if (!hit) return null;
+    // only the terms that really contain the factor group together; the rest (a lone 0, say) stay as they are
     const matches = {}; const glow = [];
     for (const U of terms) {
       const ids = this.matchSub(U, sub, U.id === T.id ? fixed : null);
-      if (!ids) return null;
+      if (!ids) continue;
       matches[U.id] = ids; glow.push(...ids);
     }
+    if (Object.keys(matches).length < 2) return null;
     return { type: 'collect', cont: cont, tid: T.id, subIds: fixed, matches: matches, glow: glow };
   }
   termsOf(orig, T) {
@@ -652,15 +654,26 @@ export class Range extends Component {
     // collect: v dropped on an equal vector in another term  →  av + bv = (a + b)v
     const T = loc.kind === 'vec' ? loc.parent : loc.node;
     const tc = this.termsOf(orig, T); if (!tc || tc.terms.length < 2) return null;
-    const vs = this.sig(v); let hit = false; const glow = [];
+    const vs = this.sig(v); let hit = false; const glow = []; const matched = [];
     for (const U of tc.terms) {
       const uv = this.vecOf(U);
-      if (!uv || uv.t !== 'v' || this.sig(uv) !== vs) return null;
-      glow.push(uv.id);
+      if (!uv || uv.t !== 'v' || this.sig(uv) !== vs) continue; // terms without this vector stay out of the grouping
+      glow.push(uv.id); matched.push(U.id);
       if (U.id !== T.id && this.inRect(this.P.get(uv.id), cx, cy, 6)) hit = true;
     }
-    if (!hit) return null;
-    return { type: 'collectV', cont: tc.cont, tid: T.id, vid: v.id, glow: glow };
+    if (!hit || matched.length < 2) return null;
+    return { type: 'collectV', cont: tc.cont, tid: T.id, vid: v.id, glow: glow, matched: matched };
+  }
+  rowSum(terms) { const S = this.mkSum(terms); this.rowArrange(S); return S; }
+  // Replace the terms of S that pass `pick` by one term made from them (make(terms)), where the first of them was;
+  // the other terms stay. Then line S up in a row.
+  groupIn(S, pick, make) {
+    const ts = S.terms.filter(t => pick(t.node.id));
+    const at = S.terms.indexOf(ts[0]);
+    const grouped = { node: make(ts), x: ts[0].x, y: ts[0].y };
+    S.terms = S.terms.filter(t => !pick(t.node.id));
+    S.terms.splice(at, 0, grouped);
+    this.rowArrange(S);
   }
   rowArrange(S) {
     let cur = 0;
@@ -686,14 +699,17 @@ export class Range extends Component {
         const f = this.typeOf(U).f || 'R';
         return !fs.length ? this.mkS(f, '1', '1') : fs.length === 1 ? fs[0] : this.mkProd(fs, null);
       };
-      if (pv.cont.type === 'sum') {
+      const inV = id => pv.matched.indexOf(id) >= 0;
+      if (pv.cont.type === 'sum' && !this.locate(tops, pv.cont.id).node.terms.every(t => inV(t.node.id))) {
+        this.groupIn(this.locate(tops, pv.cont.id).node, inV, ts => this.mkProd([this.rowSum(ts.map(t => ({ node: coef(t.node), x: t.x, y: t.y })))], v0));
+      } else if (pv.cont.type === 'sum') {
         const sl = this.locate(tops, pv.cont.id); const S = sl.node;
         const S2 = this.mkSum(S.terms.map(t => ({ node: coef(t.node), x: t.x, y: t.y })));
         this.rowArrange(S2);
         if (sl.kind === 'vec') { sl.parent.factors.push(S2); sl.parent.vec = v0; }
         else this.setRef(tops, sl, this.mkProd([S2], v0));
       } else {
-        const zt = pv.cont.ids.map(id => tops.find(t => t.node.id === id)).filter(Boolean);
+        const zt = pv.cont.ids.map(id => tops.find(t => t.node.id === id)).filter(t => t && inV(t.node.id));
         const x0 = Math.min.apply(null, zt.map(t => t.x)), y0 = Math.min.apply(null, zt.map(t => t.y));
         const S2 = this.mkSum(zt.map(t => ({ node: coef(t.node), x: t.x - x0, y: t.y - y0 })));
         this.rowArrange(S2);
@@ -735,7 +751,13 @@ export class Range extends Component {
       return r || this.mkS(field, '1', '1');
     };
     let kind;
-    if (pv.cont.type === 'sum') {
+    const inM = id => !!pv.matches[id];
+    if (pv.cont.type === 'sum' && !this.locate(tops, pv.cont.id).node.terms.every(t => inM(t.node.id))) {
+      this.groupIn(this.locate(tops, pv.cont.id).node, inM, ts => {
+        const M = this.rowSum(ts.map(t => ({ node: reduce(t.node, pv.matches[t.node.id]), x: t.x, y: t.y })));
+        return this.typeOf(M).k === 'v' ? this.mkProd(sub, M) : this.mkProd(sub.concat([M]), null);
+      });
+    } else if (pv.cont.type === 'sum') {
       const sl = this.locate(tops, pv.cont.id); const S = sl.node;
       S.terms.forEach(t => { t.node = reduce(t.node, pv.matches[t.node.id] || []); });
       kind = this.typeOf(S).k;
@@ -744,7 +766,7 @@ export class Range extends Component {
       else if (sl.kind === 'vec') sl.parent.factors.push(...sub);
       else this.setRef(tops, sl, kind === 'v' ? this.mkProd(sub, S) : this.mkProd(sub.concat([S]), null));
     } else {
-      const zt = pv.cont.ids.map(id => tops.find(t => t.node.id === id)).filter(Boolean);
+      const zt = pv.cont.ids.map(id => tops.find(t => t.node.id === id)).filter(t => t && inM(t.node.id));
       const x0 = Math.min.apply(null, zt.map(t => t.x)), y0 = Math.min.apply(null, zt.map(t => t.y));
       const S = this.mkSum(zt.map(t => ({ node: reduce(t.node, pv.matches[t.node.id] || []), x: t.x - x0, y: t.y - y0 })));
       kind = this.typeOf(S).k;
