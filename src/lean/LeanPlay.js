@@ -25,6 +25,7 @@ export class LeanPlay extends Component {
     this.play = () => {
       const st = this.state.s.state;
       if (st === 'asleep' || st === 'error' || st === 'offline') this.lean.wake();
+      else if (st === 'ready' && typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('leangame:lean')); // watch the live proof
     };
   }
 
@@ -42,9 +43,9 @@ export class LeanPlay extends Component {
   render() {
     const s = this.state.s;
     const busy = s.state === 'starting' || s.state === 'booting';
-    const canPress = !busy && s.state !== 'ready' && s.state !== 'capped' && s.state !== 'off';
+    const canPress = !busy && s.state !== 'capped' && s.state !== 'off';
     const dot = DOT[s.state] || '#94A3B8';
-    const detail = s.state === 'ready' ? `asleep after ${Math.round((s.idle_limit || 600) / 60)} idle minutes` : s.detail || '';
+    const detail = s.state === 'ready' ? 'tap to watch the proof live' : s.detail || '';
     return html`
 <div style="position: absolute; left: 12px; top: 12px; max-width: calc(100% - 24px); z-index: 1000; font-family: Inter, system-ui, sans-serif">
   <button onClick=${this.play} disabled=${!canPress} aria-live="polite"

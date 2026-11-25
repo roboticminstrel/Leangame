@@ -60,3 +60,11 @@ button { font-family: inherit; }
   from { translate: 0 0; opacity: 1; }
   to { translate: 0 110%; opacity: 0.4; }
 }
+@property --glowA {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+@keyframes glowSpin {
+  to { --glowA: 360deg; }
+}

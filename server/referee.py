@@ -302,8 +302,10 @@ def watchdog(state, shutdown_cmd):
         if state.idle() > state.idle_seconds:
             log(f"idle for {round(state.idle())}s: shutting down")
             if shutdown_cmd:
-                subprocess.run(shutdown_cmd, shell=True)
-                return
+                r = subprocess.run(shutdown_cmd, shell=True)
+                log("shutdown command exited", r.returncode)
+                time.sleep(60)  # still here a minute later: it failed, try again next round
+                continue
             state.touch()  # --no-shutdown: just say so, once per idle period
 
 
@@ -393,7 +395,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--port", type=int, default=8787)
     p.add_argument("--idle-minutes", type=float, default=10)
-    p.add_argument("--shutdown-cmd", default="shutdown -h now")
+    p.add_argument("--shutdown-cmd", default="/usr/sbin/shutdown -h now || /sbin/shutdown -h now || systemctl poweroff")
     p.add_argument("--no-shutdown", action="store_true", help="never shut the machine down (local use)")
     p.add_argument("--selftest", action="store_true")
     args = p.parse_args()

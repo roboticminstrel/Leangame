@@ -558,7 +558,7 @@ test('level 1: goal 0 in 𝑉, start 0·𝑣, with ASSUMPTIONS and GOAL above th
   assert.deepEqual(readout(c), ['0𝑣']);
   assert.deepEqual(v.heads.map(h => h.title), ['ASSUMPTIONS', 'GOAL']);
   assert.equal(v.heads[0].tokens.map(k => k.t).join(''), '{𝑉 : Type}   [VectorSpace ℝ 𝑉]   (𝑣 : 𝑉)');
-  assert.deepEqual(v.heads[0].tokens.filter(k => k.tile).map(k => k.t + ':' + k.tile.kind), ['𝑉:para', 'ℝ:para', '𝑣:node']);
+  assert.deepEqual(v.heads[0].tokens.filter(k => k.tile).map(k => k.t + ':' + k.tile.kind), ['𝑉:para', 'ℝ:para', '𝑉:para', '(𝑣 : 𝑉):decl']);
   assert.equal(v.heads[1].tokens.map(k => k.t).join(''), '0');
   assert.ok(v.heads.every(h => h.on), 'tiles shown at first');
   assert.ok(v.heads[1].y + 82 < c.K.ZT && v.heads[0].y + 82 < v.heads[1].y, 'stacked above the expression without overlapping');
@@ -568,11 +568,18 @@ test('level 1: goal 0 in 𝑉, start 0·𝑣, with ASSUMPTIONS and GOAL above th
 test('tapping a header switches its tiles off and on (the token widths animate between text and tile)', () => {
   const c = makeLevel();
   let h = c.renderVals().heads[0];
-  const vTok = () => c.renderVals().heads[0].tokens.find(k => k.t === '𝑣');
-  assert.equal(vTok().width, vTok().W);
+  const vTok = () => c.renderVals().heads[0].tokens.find(k => k.t === '(𝑣 : 𝑉)');
+  const part = s => vTok().parts.find(p => p.s === s);
+  assert.equal(vTok().width, vTok().W, 'tile mode: as wide as the 𝑣 tile');
+  assert.ok(part('𝑉').tf.includes('translateY(-21.5px)') && part('𝑉').tf.includes('scale'), '𝑉 rises into the band and shrinks');
+  assert.equal(part(' : ').op, 0, 'the colon fades');
+  assert.equal(part('𝑣').color, '#16130C');
+  const xTile = part('𝑣').x;
   h.toggle();
   assert.equal(c.renderVals().heads[0].on, false);
   assert.equal(vTok().width, vTok().w, 'back to the text width');
+  assert.equal(part('𝑉').tf, 'none'); assert.equal(part(' : ').op, 1);
+  assert.notEqual(part('𝑣').x, xTile, '𝑣 slides sideways (and only sideways)');
   c.renderVals().heads[0].toggle();
   assert.equal(vTok().width, vTok().W);
 });
@@ -830,4 +837,23 @@ test('level 1 can be won: 0𝑣 = 0𝑣 + 0 = 0𝑣 + 0𝑣 + −(0𝑣) = (0 + 
   dragTo(c, neg.vec.id, ...centre(c, plain.vec.id));                  // x + −x = 0
   assert.deepEqual(readout(c), ['0']);
   assert.equal(c.renderVals().won, true);
+});
+
+test('the TOOLS tab fills the screen with the concept graph; its current node takes you back to the game', async () => {
+  const { nodeState, ACTIVE } = await import('../src/graph/ConceptGraph.js');
+  const { NODES } = await import('../src/graph/data.js');
+  const c = makeLevel();
+  c.setState({ trayOpen: true });
+  c.renderVals().tray.pick('tools')();
+  let v = c.renderVals();
+  assert.equal(v.tray.tools, true);
+  assert.equal(v.tray.top, 0);
+  assert.equal(Math.round(v.tray.h), Math.round(716 / (390 / 560)), 'the whole screen');
+  assert.equal(ACTIVE, '1.30');
+  assert.equal(nodeState('1.27'), 'done'); assert.equal(nodeState('1.20'), 'done');
+  assert.equal(nodeState('1.32'), 'ahead'); assert.equal(nodeState('1.30'), 'active');
+  assert.equal(NODES.length, 20);
+  assert.ok(NODES.find(n => n.id === '1.30').f.length > 0, 'it has the book text');
+  v.tray.play();
+  assert.equal(c.renderVals().tray.closing, true, 'the panel slides away');
 });

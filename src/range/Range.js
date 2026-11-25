@@ -2,6 +2,7 @@
 // Ported from the design-canvas prototype: same logic class, rendered with Preact + htm (vendored, no build step).
 import { Component } from '../../vendor/preact.mjs';
 import { html } from '../html.js';
+import { ConceptGraph } from '../graph/ConceptGraph.js';
 
 export class Range extends Component {
   constructor(props) {
@@ -151,6 +152,8 @@ export class Range extends Component {
   }
   componentDidMount() {
     this.initLean();
+    this._openLean = () => this.setState({ trayOpen: true, trayClosing: false, trayTab: 'lean' });
+    window.addEventListener('leangame:lean', this._openLean);
     this._rs = () => { if (this.board) { const r = this.board.getBoundingClientRect(); this.setState({ bw: r.width, bh: r.height }); } };
     this._rs();
     window.addEventListener('resize', this._rs);
@@ -176,6 +179,7 @@ export class Range extends Component {
   }
   componentWillUnmount() {
     if (this._unsub) this._unsub();
+    window.removeEventListener('leangame:lean', this._openLean);
     window.removeEventListener('resize', this._rs);
     window.removeEventListener('pointermove', this._mv);
     window.removeEventListener('pointerup', this._up);
@@ -1601,8 +1605,10 @@ export class Range extends Component {
     const TV = St.tree ? this.treeVals(St.tree.root) : null;
     const treeTop = 64 + rows * 104;
     const sc = TV ? Math.min(1, 488 / TV.w, Math.max(0.35, (room - treeTop - 50) / TV.h)) : 1;
-    const H = (St.trayTab === 'lean') ? Math.min(560, room) : treeTop + (TV ? TV.h * sc + 10 : 0) + 40;
-    const top = (St.bh || 716) / this.fitScale() - bottom - H;
+    const full = (St.bh || 716) / this.fitScale();
+    const tools = St.trayTab === 'tools';
+    const H = tools ? full : (St.trayTab === 'lean') ? Math.min(560, room) : treeTop + (TV ? TV.h * sc + 10 : 0) + 40;
+    const top = tools ? 0 : full - bottom - H;
     let tree = null;
     if (TV) {
       const tx0 = 20 + (488 - TV.w * sc) / 2;
@@ -1626,7 +1632,9 @@ export class Range extends Component {
     });
     const dragging = (this.pdrag && this.pdrag.moved) || (this.idrag && this.idrag.moved);
     return {
-      open: !!St.trayOpen, show: !!St.trayOpen && !dragging, tab: St.trayTab || 'tray', top: top, h: H, lean: this.leanVals(),
+      open: !!St.trayOpen, show: !!St.trayOpen && !dragging, tab: St.trayTab || 'tray', top: top, h: H, lean: this.leanVals(), tools: tools,
+      // the concept graph's current node: back to the game (the panel slides away, the tray tab comes back next time)
+      play: () => { this.setState({ trayClosing: true }); clearTimeout(this._tc); this._tc = setTimeout(() => this.setState({ trayOpen: false, trayClosing: false, trayTab: 'tray' }), 220); },
       list: tiles.map((t, i) => ({ kind: entries[i].kind, t: t })), tiles: { hex: tiles[0], vec: tiles[1], one: po ? tiles[2] : null }, captionY: H - 34, tree: tree,
       closing: !!St.trayClosing,
       // open: the panel slides up; close: it slides back down first
@@ -1658,7 +1666,7 @@ export class Range extends Component {
     const V = (bg, lip, fg) => ({ kind: 'para', bg: bg, lip: lip, fg: fg });
     const vT = V('#2F5BD3', '#1E3A8A', '#FFFFFF'), rT = V('#F2B33D', '#B7791F', '#2A1D04');
     const v = this.mkV('𝑉', '𝑣', 'v', 'R', 140);
-    const assume = [['{'], ['𝑉', vT], [' : Type}   [VectorSpace '], ['ℝ', rT], [' 𝑉]   ('], ['𝑣', { kind: 'node', node: v }], [' : 𝑉)']];
+    const assume = [['{'], ['𝑉', vT], [' : Type}   [VectorSpace '], ['ℝ', rT], [' '], ['𝑉', vT], [']   '], ['(𝑣 : 𝑉)', { kind: 'decl', name: '𝑣', type: '𝑉', node: v }]];
     const goal = this.nodeTokens(St.goal);
     const build = (key, title, y, list) => {
       const on = !!(St.tiles && St.tiles[key]);
@@ -1666,6 +1674,22 @@ export class Range extends Component {
         const tw = this.textW(t);
         if (!tile) return { t: t, w: tw };
         let W, html_ = null, padL = 0, fg = '#16130C';
+        if (tile.kind === 'decl') {
+          // text: ( 𝑣 : 𝑉 ) in a row. Tile: the 𝑣 tile; 𝑣 stays the same size at the tile's element (it only slides
+          // sideways), 𝑉 rises into the band and shrinks, the brackets and colon fade.
+          const T = this.tileOf(tile.node, 0, 0); Object.assign(T.t, { el: '', type: '', shadow: 4, aria: '' });
+          const w = { o: this.textW('('), n: this.textW(tile.name), c: this.textW(' : '), t: this.textW(tile.type), e: this.textW(')') };
+          const Wt = T.w / 2;
+          const at = { o: 0, n: w.o, c: w.o + w.n, t: w.o + w.n + w.c, e: w.o + w.n + w.c + w.t };
+          return { t: t, w: tw, tile: tile, on: on, width: on ? Wt : tw, W: Wt, mini: { kind: 'vec', t: T.t, w: T.w }, fg: '#16130C',
+            parts: [
+              { s: '(', x: on ? at.o : at.o, op: on ? 0 : 1 },
+              { s: tile.name, x: on ? Wt / 2 + 8.5 - w.n / 2 : at.n, op: 1, color: on ? '#16130C' : null },
+              { s: ' : ', x: at.c, op: on ? 0 : 1 },
+              { s: tile.type, x: on ? 43.5 - w.t / 2 : at.t, op: 1, color: on ? '#FFFFFF' : null, tf: on ? 'translateY(-21.5px) scale(0.45)' : 'none' },
+              { s: ')', x: at.e, op: on ? 0 : 1 }
+            ] };
+        }
         if (tile.kind === 'para') { W = 46; fg = tile.fg; }
         else {
           const T = this.tileOf(tile.node, 0, 0);
@@ -1731,7 +1755,9 @@ export class Range extends Component {
                 <span style=${`position: absolute; left: ${(k.W - k.mini.w) / 2}px; top: -22px; width: ${k.mini.w}px; height: 88px; transform: scale(0.5); transform-origin: 50% 50%`}>${k.mini.kind === 'vec' ? this.vecHtml(k.mini.t) : this.hexHtml(k.mini.t)}</span>
               `}
             </span>
-            <span style=${`position: absolute; left: 0; right: 0; top: 14px; height: 30px; box-sizing: border-box; display: flex; align-items: center; justify-content: center; padding-left: ${k.on ? k.padL : 0}px; color: ${k.on ? k.fg : 'inherit'}; transition: padding 0.35s ease, color 0.3s ease; z-index: 1`}>${k.t}</span>
+            ${k.parts ? k.parts.map(pt => html`<span style=${`position: absolute; left: ${pt.x}px; top: 14px; height: 30px; line-height: 30px; white-space: pre; z-index: 1; opacity: ${pt.op}; color: ${pt.color || 'inherit'}; transform: ${pt.tf || 'none'}; transform-origin: 50% 50%;
+              transition: left 0.35s ease ${k.on ? '0s' : '0.2s'}, transform 0.35s ease ${k.on ? '0s' : '0.2s'}, opacity 0.2s ease ${k.on ? '0s' : '0.25s'}, color 0.3s ease`}>${pt.s}</span>`) : html`
+            <span style=${`position: absolute; left: 0; right: 0; top: 14px; height: 30px; box-sizing: border-box; display: flex; align-items: center; justify-content: center; padding-left: ${k.on ? k.padL : 0}px; color: ${k.on ? k.fg : 'inherit'}; transition: padding 0.35s ease, color 0.3s ease; z-index: 1`}>${k.t}</span>`}
           </span>`)}
       </div>
     </div>`;
@@ -2033,11 +2059,11 @@ export class Range extends Component {
       <button onClick=${v.tray.toggle} aria-label="Open the tray" style="position: absolute; left: 18px; bottom: 108px; height: 60px; padding: 0 22px; border-radius: 30px; border: 1.5px solid rgba(203,213,225,0.45); background: rgba(27,37,58,0.94); color: #E2E8F0; font-family: Inter, system-ui, sans-serif; font-size: 20px; font-weight: 600; cursor: pointer; pointer-events: auto">Tray</button>
     ` : null}
     ${v.tray && v.tray.show ? html`
-      <div role="dialog" aria-label="Tray" style=${`position: absolute; left: 16px; top: ${v.tray.top}px; width: 528px; height: ${v.tray.h}px; box-sizing: border-box; border-radius: 22px; background: rgba(27,37,58,0.98); border: 1.5px solid rgba(255,255,255,0.14); box-shadow: 0 10px 30px rgba(0,0,0,0.5); pointer-events: auto; z-index: 1000; font-family: Inter, system-ui, sans-serif; overflow: hidden;
-        transition: top 0.22s cubic-bezier(0.3, 0.9, 0.4, 1), height 0.22s cubic-bezier(0.3, 0.9, 0.4, 1); animation: ${v.tray.closing ? 'trayDown 0.22s ease-in both' : 'trayUp 0.28s cubic-bezier(0.2, 0.9, 0.3, 1) both'}`}>
+      <div role="dialog" aria-label="Tray" style=${`position: absolute; left: ${v.tray.tools ? 0 : 16}px; top: ${v.tray.top}px; width: ${v.tray.tools ? 560 : 528}px; height: ${v.tray.h}px; box-sizing: border-box; border-radius: ${v.tray.tools ? 0 : 22}px; background: ${v.tray.tools ? '#FFFFFF' : 'rgba(27,37,58,0.98)'}; border: 1.5px solid ${v.tray.tools ? '#E2E8F0' : 'rgba(255,255,255,0.14)'}; box-shadow: 0 10px 30px rgba(0,0,0,0.5); pointer-events: auto; z-index: 1000; font-family: Inter, system-ui, sans-serif; overflow: hidden;
+        transition: top 0.22s cubic-bezier(0.3, 0.9, 0.4, 1), height 0.22s cubic-bezier(0.3, 0.9, 0.4, 1), left 0.22s ease, width 0.22s ease, border-radius 0.22s ease, background-color 0.22s ease; animation: ${v.tray.closing ? 'trayDown 0.22s ease-in both' : 'trayUp 0.28s cubic-bezier(0.2, 0.9, 0.3, 1) both'}`}>
         <div style="display: flex; align-items: center; gap: 8px; padding: 12px 12px 0 14px">
-          ${['tray', 'lean'].map(tab => html`
-            <button onClick=${v.tray.pick(tab)} aria-pressed=${v.tray.tab === tab ? 'true' : 'false'} style=${`height: 42px; padding: 0 18px; border-radius: 21px; border: 1.5px solid ${v.tray.tab === tab ? '#F2B33D' : 'rgba(203,213,225,0.3)'}; background: ${v.tray.tab === tab ? 'rgba(242,179,61,0.16)' : 'transparent'}; color: ${v.tray.tab === tab ? '#F2B33D' : '#CBD5E1'}; font: inherit; font-size: 17px; font-weight: 700; letter-spacing: 0.06em; cursor: pointer`}>${tab === 'tray' ? 'TRAY' : 'LEAN'}</button>
+          ${['tray', 'lean', 'tools'].map(tab => html`
+            <button onClick=${v.tray.pick(tab)} aria-pressed=${v.tray.tab === tab ? 'true' : 'false'} style=${`height: 42px; padding: 0 18px; border-radius: 21px; transition: all 0.22s ease; border: 1.5px solid ${v.tray.tab === tab ? (v.tray.tools ? '#1E3A8A' : '#F2B33D') : (v.tray.tools ? '#CBD5E1' : 'rgba(203,213,225,0.3)')}; background: ${v.tray.tab === tab ? (v.tray.tools ? '#DBEAFE' : 'rgba(242,179,61,0.16)') : 'transparent'}; color: ${v.tray.tools ? (v.tray.tab === tab ? '#1E3A8A' : '#475569') : v.tray.tab === tab ? '#F2B33D' : '#CBD5E1'}; font: inherit; font-size: 17px; font-weight: 700; letter-spacing: 0.06em; cursor: pointer`}>${tab.toUpperCase()}</button>
           `)}
           <span style="flex: 1"></span>
           <button onClick=${v.tray.toggle} aria-label="Close the tray" style="width: 42px; height: 42px; border-radius: 21px; border: 1.5px solid rgba(203,213,225,0.3); background: transparent; color: #CBD5E1; font: inherit; font-size: 22px; line-height: 1; cursor: pointer">×</button>
@@ -2048,13 +2074,17 @@ export class Range extends Component {
             ${v.tray.tree ? this.treeHtml(v.tray.tree) : null}
             <div style=${`position: absolute; left: 22px; right: 20px; top: ${v.tray.captionY}px; font-size: 14px; line-height: 19px; color: #94A3B8`}>Tap a tile on the board to see its group as a tree · tap a tree node to negate or invert it · drag a node out onto a matching 0 (or 1) to split it</div>
           </div>
+        ` : v.tray.tab === 'tools' ? html`
+          <div style=${`position: absolute; left: 0; right: 0; top: 64px; bottom: 0; overflow: hidden; border-top: 1px solid #E2E8F0`}>
+            <div style=${`width: 390px; height: ${(v.tray.h - 64) * 390 / 560}px; transform: scale(${560 / 390}); transform-origin: 0 0`}>
+              <${ConceptGraph} onPlay=${v.tray.play} />
+            </div>
+          </div>
         ` : html`
           ${this.leanHtml(v.tray.lean)}
         `}
       </div>
     ` : null}
-    <div style="position: absolute; left: 0; right: 0; bottom: 0; height: 68px; background: linear-gradient(rgba(18,26,43,0), rgba(18,26,43,0.95) 40%)"></div>
-    <div style="position: absolute; left: 24px; right: 24px; bottom: 16px; text-align: center; font-family: Inter, system-ui, sans-serif; font-size: 16px; line-height: 22px; color: #94A3B8">${v.hint}</div>
   </div>
 </div>
 `;
