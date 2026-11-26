@@ -114,14 +114,18 @@ export class ConceptGraph extends Component {
       </svg>
       ${VIS.map(n => {
         const L = look(n); const active = n.id === this.props.active; const on = this.state.sel === n.id;
+        // the level being played spins its glow; once won it holds a steady, brighter one (you're here, nothing to do)
+        const won = active && (this.props.done || []).indexOf(n.id) >= 0;
+        // a level you can start: its grey edge breathes lightly
+        const playable = !active && st(n.id) === 'next' && levels.has(n.id);
         const missing = st(n.id) === 'partial' ? n.deps.filter(d => !done.has(d)) : null;
         const pulsed = !!(pulse && pulse.missing.indexOf(n.id) >= 0);
         const card = html`<button onClick=${() => this.tap(n, missing)} aria-label=${n.id + ' ' + n.title + (active ? ': the level being played' : st(n.id) === 'next' ? ': one step away' : missing ? ': needs ' + missing.join(', ') + ' first' : '')}
-          style=${`position: absolute; left: ${active ? 2 : 0}px; top: ${active ? 2 : 0}px; width: ${active ? 108 : 112}px; height: ${active ? 36 : 40}px; box-sizing: border-box; padding: 0 8px; border-radius: ${active ? 8 : 10}px; border: ${active ? 'none' : L.border}; background: ${L.bg}; color: ${L.fg}; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; text-align: left; cursor: pointer; outline: ${on ? '3px solid #F59E0B' : 'none'}; outline-offset: 2px`}>
+          style=${`position: absolute; left: ${active ? 2 : 0}px; top: ${active ? 2 : 0}px; width: ${active ? 108 : 112}px; height: ${active ? 36 : 40}px; box-sizing: border-box; padding: 0 8px; border-radius: ${active ? 8 : 10}px; border: ${active ? 'none' : L.border}; background: ${L.bg}; animation: ${playable ? 'edgeBreathe 2.2s ease-in-out infinite' : 'none'}; color: ${L.fg}; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; text-align: left; cursor: pointer; outline: ${on ? '3px solid #F59E0B' : 'none'}; outline-offset: 2px`}>
           <span style=${`font-size: 10px; font-weight: 700; color: ${L.idFg}; line-height: 12px`}>${n.id}</span>
           <span style="font-size: 12px; font-weight: 600; line-height: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%">${n.name}</span>
         </button>`;
-        return html`<div key=${n.id + (pulsed ? ':p' + pulse.k : '')} style=${`position: absolute; left: ${COLS[n.col] - 56}px; top: ${rowY(n.row)}px; width: 112px; height: 40px; border-radius: 10px; animation: ${[active ? 'glowSpin 2.4s linear infinite' : '', pulsed ? 'nodePulse 0.6s ease-in-out 2' : ''].filter(Boolean).join(', ') || 'none'}; ${active ? 'background: conic-gradient(from var(--glowA), #EA580C 0 62%, #FDE68A 76%, #F59E0B 84%, #EA580C 96%); box-shadow: 0 0 14px rgba(245,158,11,0.45)' : ''}`}>${card}</div>`;
+        return html`<div key=${n.id + (pulsed ? ':p' + pulse.k : '')} style=${`position: absolute; left: ${COLS[n.col] - 56}px; top: ${rowY(n.row)}px; width: 112px; height: 40px; border-radius: 10px; animation: ${[active && !won ? 'glowSpin 2.4s linear infinite' : '', pulsed ? 'nodePulse 0.6s ease-in-out 2' : ''].filter(Boolean).join(', ') || 'none'}; ${won ? 'background: linear-gradient(135deg, #F59E0B, #FDE68A 50%, #F59E0B); box-shadow: 0 0 22px 3px rgba(245,158,11,0.7)' : active ? 'background: conic-gradient(from var(--glowA), #EA580C 0 62%, #FDE68A 76%, #F59E0B 84%, #EA580C 96%); box-shadow: 0 0 14px rgba(245,158,11,0.45)' : ''}`}>${card}</div>`;
       })}
     </div>
   </div>
