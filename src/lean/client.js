@@ -15,6 +15,8 @@ const POLL_MS = 3000;          // while starting
 const WATCH_MS = 60000;        // while ready: has it gone to sleep?
 const TOUCH_MS = 60000;        // at most one touch a minute
 const GIVE_UP_MS = 20 * 60000; // a first boot builds Lean (~10 min); past this, say something's wrong
+const RETRY_MS = 5000;         // a request that failed in transit: try again this much later (times the tries)
+const TRIES = 4;               // this many failures in a row before saying Lean can't be reached
 
 export function createLean({ fetch = globalThis.fetch ? globalThis.fetch.bind(globalThis) : null, base = '/api/lean', onChange = () => {},
   setTimeout = globalThis.setTimeout, clearTimeout = globalThis.clearTimeout, now = Date.now } = {}) {
@@ -22,6 +24,8 @@ export function createLean({ fetch = globalThis.fetch ? globalThis.fetch.bind(gl
   let timer = null;
   let lastTouch = 0;
   let wokeAt = 0;
+  let fails = 0;             // status checks that failed in transit, in a row
+  let stalled = false;       // a step didn't get through: send it again with the next status check
   const listeners = new Set([onChange]);
   const notify = () => listeners.forEach((fn) => fn(status, live));
 
@@ -50,11 +54,15 @@ export function createLean({ fetch = globalThis.fetch ? globalThis.fetch.bind(gl
         body: body ? JSON.stringify(body) : undefined,
       });
     } catch (e) {
-      return { state: 'offline', detail: 'Can’t reach the server' };
+      return { state: 'offline', transient: true, detail: 'Can’t reach the server' };
     }
     const type = r.headers.get('content-type') || '';
+    // a gateway timing out or briefly failing (5xx): worth another try, not the end of Lean
+    if (r.status >= 500 && !type.includes('json')) return { state: 'offline', transient: true, detail: `HTTP ${r.status}` };
     if (!type.includes('json')) return { state: 'offline', detail: 'The Lean server isn’t set up yet' };
-    const j = await r.json();
+    let j;
+    try { j = await r.json(); } catch (e) { return { state: 'offline', transient: true, detail: 'A reply Lean’s gate couldn’t read' }; }
+    if (r.status >= 500 && !j.state) return { state: 'offline', transient: true, detail: j.error || j.message || `HTTP ${r.status}` };
     return r.ok || j.state ? j : { state: 'error', detail: j.error || `HTTP ${r.status}` };
   }
 
@@ -65,9 +73,15 @@ export function createLean({ fetch = globalThis.fetch ? globalThis.fetch.bind(gl
 
   async function poll() {
     const s = await call('GET', '/status');
+    // one failed check (the phone's network, a gateway hiccup) doesn't end Lean: try again a few times first
+    if (s.transient && ['ready', 'booting', 'starting'].includes(status.state) && fails < TRIES - 1) {
+      fails++; schedule(RETRY_MS * fails, poll); return;
+    }
+    fails = 0;
     if (s.state === 'ready') {
       set(s);
-      schedule(WATCH_MS, poll);
+      if (stalled && sid) { stalled = false; queue = queue.then(flush); }
+      schedule(sent < history.length || stalled ? RETRY_MS : WATCH_MS, poll);
     } else if (s.state === 'starting' || s.state === 'booting') {
       if (now() - wokeAt > GIVE_UP_MS) return set({ ...s, state: 'error', detail: 'Lean is taking too long to start' });
       set(s);
@@ -121,7 +135,8 @@ export function createLean({ fetch = globalThis.fetch ? globalThis.fetch.bind(gl
       if (!m.from || !m.to || (Array.isArray(m.from) && !(m.from[0] && m.from[1] && m.to[0] && m.to[1]))) { setLive({ steps: live.steps.concat([{ ok: false, hint: m.hint, error: 'This position can’t be written in Lean yet' }]) }); continue; }
       lastTouch = now();
       const r = await call('POST', '/check', { session: 'step', sid, from: m.from, to: m.to, hint: m.hint || [], witness: m.witness || null, target: m.target || null });
-      if (r.state === 'asleep' || r.state === 'booting') { sent--; return; }
+      // didn't get through (the gate gave up waiting, the network failed): the next status check sends it again
+      if (r.state === 'asleep' || r.state === 'booting' || r.transient) { sent--; stalled = true; schedule(RETRY_MS, poll); return; }
       if (r.error && /session ended/.test(r.error)) { beginLive(); return; }
       const stepRow = { ok: !!r.ok, hint: m.hint, error: r.ok ? null : r.error };
       if (r.ok) setLive({ steps: live.steps.concat([stepRow]), goals: r.goals || [], done: !!r.done, verified: r.done ? !!r.verified : null, error: null });

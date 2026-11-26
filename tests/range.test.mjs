@@ -1314,16 +1314,24 @@ test('workspaces: a double tap on a hypothesis brings its equation into the box;
   const z2 = c.state.tops.find(t => t.node.key === 'zero').node;
   dragHyp(c, 'h′', ...centre(c, z2.id)); after(c);
   assert.deepEqual(readout(c), ['𝑤 + 𝑤′ + 𝑣']);
-  // undo shows each move undone on the board it was made on: the card move on the expression, then the reorder on h′
+  // one history for every board; undo leaves the expression in the box: undoing the move made on h′ only changes
+  // h′'s text in the header
   c.undo(); after(c);
-  assert.equal(c.state.ws, 'expr');
   assert.deepEqual(readout(c), ['𝑤 + 0']);
   c.undo(); after(c);
-  assert.equal(c.state.ws, 'h2', 'undoing a move made on h′ brings h′ back into the box');
-  assert.deepEqual(readout(c), ['𝑣 + 𝑤′ = 0']);
-  assert.equal(c.exprText(c.state.hyps.find(h => h.name === 'h2').lhs, true), '𝑣 + 𝑤′');
+  assert.equal(c.state.ws, 'expr', 'the box keeps the expression');
+  assert.deepEqual(readout(c), ['𝑤 + 0']);
+  assert.equal(c.renderVals().heads[0].rows[2].map(k => k.t).join(''), '(h : 𝑣 + 𝑤 = 0)   (h′ : 𝑣 + 𝑤′ = 0)', 'h′ is back as it was');
   c.redo(); after(c);
+  assert.equal(c.renderVals().heads[0].rows[2].map(k => k.t).join(''), '(h : 𝑣 + 𝑤 = 0)   (h′ : 𝑤′ + 𝑣 = 0)');
+  // with h′ in the box, undoing a move made on the expression changes the small EXPRESSION box's text
+  c.redo(); after(c);
+  c.headTap('h2', null, 9000); c.headTap('h2', null, 9100); after(c);
+  assert.equal(c.renderVals().heads[0].rows[2].find(k => k.slot).t, '𝑤 + 𝑤′ + 𝑣');
+  c.undo(); after(c);
+  assert.equal(c.state.ws, 'h2');
   assert.deepEqual(readout(c), ['𝑤′ + 𝑣 = 0']);
+  assert.equal(c.renderVals().heads[0].rows[2].find(k => k.slot).t, '𝑤 + 0');
 });
 
 test('workspaces: the goal can be worked on too, and the level is won when the expression meets it', () => {

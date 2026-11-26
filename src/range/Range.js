@@ -303,19 +303,20 @@ export class Range extends Component {
   undo() {
     if (!this.canUndo() || this.drag) return;
     const e = this.hist.entries[this.hist.idx]; this.hist.idx--;
-    // shown on the board the undone move was made on
-    this.restore(this.hist.entries[this.hist.idx], { steps: e.steps.slice().reverse().map(st => [st[1], st[0], st[2], null, st[4] || null]) }, e.ws || 'expr');
+    // one chain for every board: the board in the box stays there (a move undone on another board only changes its
+    // text in the header)
+    this.restore(this.hist.entries[this.hist.idx], { steps: e.steps.slice().reverse().map(st => [st[1], st[0], st[2], null, st[4] || null]) }, this.state.ws || 'expr');
   }
   redo() {
     if (!this.canRedo() || this.drag) return;
     this.hist.idx++; const e = this.hist.entries[this.hist.idx];
-    this.restore(e, { steps: e.steps });
+    this.restore(e, { steps: e.steps }, this.state.ws || 'expr');
   }
   // all the way back to the start; redo still walks forward until a new move overwrites what's ahead
   rewind() {
     if (!this.canUndo() || this.drag) return;
     this.hist.idx = 0;
-    this.restore(this.hist.entries[0], { restart: true, steps: [] });
+    this.restore(this.hist.entries[0], { restart: true, steps: [] }, this.state.ws || 'expr');
   }
   restore(entry, R, wsWanted) {
     this._restoring = R;
@@ -325,9 +326,9 @@ export class Range extends Component {
     const goal = entry.goal ? this.clone(entry.goal) : (lv ? lv.build(this).goal : this.state.goal);
     let ws = entry.ws || 'expr'; const boards = entry.boards ? this.clone(entry.boards) : {};
     let tops = this.clone(entry.tops);
-    if (wsWanted && wsWanted !== ws && (wsWanted === 'goal' || wsWanted === 'expr' || hyps.some(h => h.name === wsWanted))) {
-      boards[ws] = tops; tops = boards[wsWanted] ? boards[wsWanted] : this.wsStart(wsWanted, goal, hyps); ws = wsWanted;
-    }
+    // the board to show: the one asked for, if it exists at that moment (a witness may not yet), else the expression
+    const want = wsWanted && (wsWanted === 'goal' || wsWanted === 'expr' || hyps.some(h => h.name === wsWanted)) ? wsWanted : (wsWanted ? 'expr' : ws);
+    if (want !== ws) { boards[ws] = tops; tops = boards[want] ? boards[want] : this.wsStart(want, goal, hyps); delete boards[want]; ws = want; }
     this.setState({ hyps: hyps, goal: goal, ws: ws, boards: boards, wsAnim: null,
       tops: this.normTops(this.tidy(tops, ws)), histAnim: true, zeroHover: null, preview: null, slide: null, slides: {} });
     clearTimeout(this._ha); this._ha = setTimeout(() => this.setState({ histAnim: false }), 450);

@@ -111,3 +111,23 @@ test('live proof: starts when Lean is ready, replays the moves made before, then
   assert.equal(lean.live.verified, true);
   assert.equal(lean.live.steps.length, 2);
 });
+
+test('a status check that fails in transit is retried; only several in a row mean offline', async () => {
+  const c = clock();
+  let n = 0;
+  const fetch = async (url, opts) => {
+    if (url.endsWith('/wake')) return { ok: true, status: 200, headers: { get: () => 'application/json' }, json: async () => ({ state: 'ready' }) };
+    n++;
+    if (n === 1) throw new Error('network');                                                   // the phone blinked
+    if (n === 2) return { ok: false, status: 504, headers: { get: () => 'text/html' }, json: async () => ({}) }; // gateway timeout
+    if (n === 3) return { ok: true, status: 200, headers: { get: () => 'application/json' }, json: async () => ({ state: 'ready' }) };
+    throw new Error('network');
+  };
+  const lean = createLean({ fetch, ...c });
+  await lean.wake();
+  await c.run(); assert.equal(lean.status.state, 'ready', 'one failure: still ready, trying again');
+  await c.run(); assert.equal(lean.status.state, 'ready');
+  await c.run(); assert.equal(lean.status.state, 'ready', 'answered: carries on');
+  for (let i = 0; i < 4; i++) await c.run();
+  assert.equal(lean.status.state, 'offline', 'four failures in a row: offline');
+});

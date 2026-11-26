@@ -72,9 +72,11 @@ class Live(unittest.TestCase):
 
     def test_step(self):
         tac = render.step({"add": [u, {"zero": True}]}, u, ["add_zero"])
-        self.assertTrue(tac.startswith("refine Eq.trans (show (u + (0 : V)) = u by first | ac_rfl | " + render.REARRANGE + " | (rw [Axler.AddLaws.add_zero]; done)"))
+        self.assertTrue(tac.startswith("refine Eq.trans (show (u + (0 : V)) = u by first | ac_rfl | " + render.REARRANGE + " | (rw [Axler.AddLaws.add_zero] <;> ac_rfl)"))
         self.assertTrue(tac.endswith(") ?_ <;> try with_reducible rfl"))
-        self.assertIn("(nth_rw 2 [← Axler.VectorSpace.add_smul]; ac_rfl)", tac)  # every rule, after the hint
+        self.assertIn("(nth_rw 2 [← Axler.AddLaws.add_comm] <;> ac_rfl)", tac)  # a companion law, after the hint
+        self.assertNotIn("add_smul", tac)  # not every law: a refusal has to come back quickly
+        self.assertIn("add_smul", render.step(u, u, ["add_smul"]))
         self.assertNotIn("#", tac)
         with self.assertRaises(render.BadInput):
             render.step(a, v)
@@ -109,7 +111,7 @@ class Live(unittest.TestCase):
         t = render.theorem(v, {"v": "w2"}, hyps=[[{"add": [u, v]}, z]])
         self.assertIn("(u v w2 : V) (h1 : (u + v) = (0 : V)) :", t)
         tac = render.step({"add": [u, v]}, z, ["h1"], nhyps=1)
-        self.assertIn("(rw [h1]; done)", tac)
+        self.assertIn("(rw [h1] <;> ac_rfl)", tac)
         self.assertNotIn("h1", render.step({"add": [u, v]}, z, ["h1"], nhyps=0))  # not a hypothesis of this theorem
         with self.assertRaises(render.BadInput):
             render.theorem(v, u, hyps=[[a, v]])

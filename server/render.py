@@ -231,8 +231,7 @@ def alternatives(rules, lemmas=None):
             for arrow in ("", "← "):
                 for n in range(1, OCCURRENCES + 1):
                     rw = f"rw [{arrow}{lemma}]" if n == 1 else f"nth_rw {n} [{arrow}{lemma}]"
-                    tries.append(f"({rw}; done)")
-                    tries.append(f"({rw}; ac_rfl)")
+                    tries.append(f"({rw} <;> ac_rfl)")  # closed by the rewrite, or the same terms reordered
     return tries
 
 
@@ -255,13 +254,7 @@ def step(frm, to, hint=None, nhyps=0):
     move's rule (hint) or any rule, and leaves `next = goal`, closed at once when next is the goal itself. A hint h1…
     names one of the level's hypotheses (only those the theorem has: nhyps)."""
     _check(frm, to)
-    lemmas = dict(RULES)
-    for i in range(1, min(int(nhyps or 0), 9) + 1):
-        lemmas[f"h{i}"] = [f"h{i}"]
-    hints = [h for h in (hint or []) if h in lemmas or h == ARITH]
-    rules = hints + [r for r in lemmas if r not in hints] + ([] if ARITH in hints else [ARITH])  # arithmetic last
-    alts = " | ".join(alternatives(rules, lemmas))
-    return f"refine Eq.trans (show {term(frm)} = {term(to)} by first | {alts}) ?_ <;> try with_reducible rfl"
+    return f"refine Eq.trans (show {term(frm)} = {term(to)} by first | {_alts(hint, nhyps)}) ?_ <;> try with_reducible rfl"
 
 
 def _lemmas(nhyps):
@@ -271,10 +264,23 @@ def _lemmas(nhyps):
     return lemmas
 
 
-def _alts(hint, nhyps):
+# The laws tried besides a move's own (its hint): the ones a move's two sides most often differ by besides it. A step
+# Lean can't prove fails after trying these, quickly; trying every law took 30-40 s, long enough that the REPL was
+# taken for stuck and restarted (and the board's proof with it).
+COMPANIONS = ["add_zero", "zero_add", "add_neg_cancel", "neg_add_cancel", "add_comm", "add_assoc", "mul_one"]
+
+
+def _rules(hint, nhyps):
+    """The laws a live step tries, in order: the hint's, then the companions, then arithmetic. With no hint (the board
+    sends none for rearranging) the companions and arithmetic, after the rearranging tactics."""
     lemmas = _lemmas(nhyps)
     hints = [h for h in (hint or []) if h in lemmas or h == ARITH]
-    rules = hints + [r for r in lemmas if r not in hints] + ([] if ARITH in hints else [ARITH])
+    rest = [r for r in COMPANIONS if r in lemmas and r not in hints]
+    return hints + rest + ([] if ARITH in hints else [ARITH]), lemmas
+
+
+def _alts(hint, nhyps):
+    rules, lemmas = _rules(hint, nhyps)
     return " | ".join(alternatives(rules, lemmas))
 
 

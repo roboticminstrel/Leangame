@@ -40,6 +40,7 @@ LEAN_DIR = os.path.join(ROOT, "lean")
 IMPORTS = "import Leangame"
 MAX_BODY = 64 * 1024
 CHECK_SECONDS = 30
+STEP_SECONDS = 120  # a live step: a slow refusal isn't a stuck REPL (killing it would end every live proof)
 RESTART_AFTER = 2000  # commands; the REPL keeps every environment it made
 
 
@@ -209,13 +210,18 @@ class Sessions:
         s = self.live.get(body.get("sid"))
         if not s or s["restarts"] != self.repl.restarts:
             return 409, {"ok": False, "error": "session ended: start again"}
+        # the same step again (its answer was lost, e.g. the gate gave up waiting): answer it from memory rather than
+        # run it twice
+        key = json.dumps([body.get("from"), body.get("to"), body.get("target"), body.get("witness")], sort_keys=True)
+        if s.get("last") == key:
+            return 200, s["lastOut"]
         wit = body.get("witness")
         if wit and wit.get("name") not in s["obtained"]:
             # a witness from the inverse axiom, first: obtain ⟨y, h⟩ (its hypothesis is the next h)
             if wit.get("h") != f"h{s['nhyps'] + 1}":
                 return 400, {"ok": False, "error": f"the next hypothesis is h{s['nhyps'] + 1}"}
             otac = render.witness(wit.get("x"), wit.get("name"), wit.get("h"))
-            r0 = self.repl.raw({"tactic": otac, "proofState": s["ps"]})
+            r0 = self.repl.raw({"tactic": otac, "proofState": s["ps"]}, timeout=STEP_SECONDS)
             errs0 = self.errors_of(r0)
             if errs0 or "proofState" not in r0:
                 return 200, {"ok": False, "error": (errs0 or ["Lean refused the witness"])[0][:400], "goals": None}
@@ -232,11 +238,14 @@ class Sessions:
             tac = render.hyp_step(h, body.get("from"), body.get("to"), target.get("bind"), body.get("hint"), s.get("nhyps", 0))
         else:
             tac = render.step(body.get("from"), body.get("to"), body.get("hint"), s.get("nhyps", 0))
-        r = self.repl.raw({"tactic": tac, "proofState": s["ps"]})
+        t0 = time.time()
+        r = self.repl.raw({"tactic": tac, "proofState": s["ps"]}, timeout=STEP_SECONDS)
+        log(f"step {'ok' if 'proofState' in r and not self.errors_of(r) else 'refused'} in {time.time() - t0:.1f}s")
         errs = self.errors_of(r)
         if errs or "proofState" not in r:
             return 200, {"ok": False, "error": (errs or ["Lean refused the step"])[0][:400], "goals": None}
         s["ps"] = r["proofState"]
+        s["last"] = key
         s["tactics"].append(tac)
         goals = self.goals_of(r)
         out = {"ok": True, "goals": goals, "done": not goals, "tactic": tac}
@@ -247,6 +256,7 @@ class Sessions:
             out["verified"] = not errors
             if errors:
                 out["verify_error"] = errors[0][:400]
+        s["lastOut"] = out
         return 200, out
 
 
@@ -451,6 +461,12 @@ def selftest():
     checks.append(("live: factoring terms that aren't neighbours (0v + −(0v) + 0v → (0v + 0v) + −(0v) → (0 + 0)v + −(0v))", rf.get("ok")))
     if not rf.get("ok"):
         print("     non-adjacent factor:", json.dumps(rf)[:1500], flush=True)
+    # a step Lean can't prove is refused quickly (it used to take 30-40 s, and the REPL was restarted as stuck)
+    code, sq = ss.start({"start": w, "goal": {"zero": True}})
+    t0 = time.time()
+    rq = ss.step({"sid": sq.get("sid"), "from": w, "to": {"add": [w, w]}, "hint": ["add_smul"]})[1]  # v = v + v: false
+    took = time.time() - t0
+    checks.append((f"live: a wrong step is refused quickly ({took:.1f}s, under 15)", not rq.get("ok") and took < 15))
     # level 1.26: (h1 : ∀ x : V, x + o = x) : o = 0, the book's way: o → o + 0 → 0 + o → 0
     O, X = {"v": "o"}, {"v": "x"}
     seq26 = [({"add": [O, {"zero": True}]}, ["add_zero"]), ({"add": [{"zero": True}, O]}, None), ({"zero": True}, ["h1"])]
