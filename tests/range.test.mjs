@@ -1509,3 +1509,16 @@ test('TOOLS: Reset progress forgets every win and place after a second tap, back
   assert.deepEqual(store.load().places, {});
   assert.deepEqual(readout(c), ['0𝑣']);
 });
+
+test('Lean wakes early: on the first move (or opening a level), once, and only if it is asleep', () => {
+  let wakes = 0; let state = 'asleep';
+  const lean = { setLevel: () => {}, boardChanged: () => {}, subscribe: () => () => {}, wake: () => { wakes++; state = 'starting'; }, get status() { return { state }; }, get boot() { return { total: 161, phases: [{ label: 'Starting a machine', s: 41 }, { label: 'Installing tools', s: 120 }] }; } };
+  const c = makeLive({ lean, store: memoryStore({ v: 2, done: DONE0 }) }); c.initLean(); after(c);
+  assert.equal(wakes, 0, 'not just for opening the page');
+  dragPiece(c, 'PZ', ...centre(c, c.state.tops[0].node.vec.id)); after(c);
+  assert.equal(wakes, 1, 'the first move wakes it');
+  const z = c.state.tops.find(t => t.node.key === 'zero').node;
+  dragTo(c, z.id, ...centre(c, c.state.tops[0].node.vec.id)); after(c);
+  assert.equal(wakes, 1, 'once');
+  assert.equal(c.leanVals().boot, 'Last start took 2:41: Starting a machine 0:41 · Installing tools 2:00');
+});

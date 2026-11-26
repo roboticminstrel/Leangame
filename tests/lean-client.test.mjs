@@ -131,3 +131,32 @@ test('a status check that fails in transit is retried; only several in a row mea
   for (let i = 0; i < 4; i++) await c.run();
   assert.equal(lean.status.state, 'offline', 'four failures in a row: offline');
 });
+
+test('a start is timed phase by phase (from the status the gate shows), and the last one is kept', async () => {
+  const c = clock();
+  const g = fakeGate({
+    'POST /wake': { state: 'starting', up_seconds: 0 },
+    'GET /status': [
+      { state: 'starting', up_seconds: 3 },
+      { state: 'booting', detail: 'Installing tools', up_seconds: 40 },
+      { state: 'booting', detail: 'Installing tools', up_seconds: 43 },
+      { state: 'booting', detail: 'Unpacking Lean', up_seconds: 100 },
+      { state: 'booting', detail: 'Loading Lean', up_seconds: 130 },
+      { state: 'ready', up_seconds: 136, idle_limit: 600 },
+    ],
+  });
+  let kept = null;
+  const storage = { get: () => null, set: (v) => { kept = v; } };
+  const boots = [];
+  const lean = createLean({ fetch: g.fetch, storage, onChange: (s, live, boot) => boots.push(boot), ...c });
+  await lean.wake();
+  for (let i = 0; i < 6; i++) await c.run();
+  assert.equal(lean.status.state, 'ready');
+  assert.deepEqual(lean.boot.phases, [
+    { label: 'Starting a machine', s: 40 }, { label: 'Installing tools', s: 60 }, { label: 'Unpacking Lean', s: 30 }, { label: 'Loading Lean', s: 6 }]);
+  assert.equal(lean.boot.total, 136);
+  assert.deepEqual(kept, lean.boot, 'kept for next time');
+  assert.deepEqual(boots[boots.length - 1], lean.boot, 'listeners get it too');
+  // a page opened later shows the last start
+  assert.deepEqual(createLean({ fetch: g.fetch, storage: { get: () => kept, set: () => {} }, ...clock() }).boot, kept);
+});

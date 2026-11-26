@@ -329,6 +329,7 @@ export class Range extends Component {
   // Start (or go back to) another level: this one's place is saved, the other's restored where it was left
   switchLevel(id, fresh) {
     if (!LEVELS[id]) return;
+    this.preWake();
     if (!fresh) this.savePlace();
     this.layoutFor(id);
     const L = this.loadLevel(id);
@@ -481,6 +482,7 @@ export class Range extends Component {
       if (H.entries.length > 200) H.entries = H.entries.slice(H.entries.length - 200);
       H.idx = H.entries.length - 1;
       this.checkWin();
+      this.preWake();
     }
     if (L) {
       if (R && R.restart) this.leanLevel(L);
@@ -494,7 +496,7 @@ export class Range extends Component {
   initLean() {
     if (this.props.legacy) return;
     this.syncLean();
-    if (this.props.lean) this._unsub = this.props.lean.subscribe((status, live) => this.setState({ leanStatus: status, leanLive: live }));
+    if (this.props.lean) this._unsub = this.props.lean.subscribe((status, live, boot) => this.setState({ leanStatus: status, leanLive: live, leanBoot: boot || null }));
   }
   // the live proof for the current level: from its start, with the moves up to where the player is replayed
   syncLean() {
@@ -2442,7 +2444,7 @@ export class Range extends Component {
       offline: st.detail || 'Lean isn’t reachable.', error: st.detail || 'Lean had a problem.' };
     return {
       status: st.state === 'ready' ? (live.state === 'starting' ? 'Opening the proof…' : live.state === 'error' ? 'Lean: ' + live.error : 'Lean is running this proof live') : words[st.state] || st.state,
-      ready: st.state === 'ready', live: live
+      ready: st.state === 'ready', live: live, boot: this.bootText()
     };
   }
   // The dotted box around the expression: it hugs the expression's tiles (growing and shrinking as they move, so it
@@ -2534,6 +2536,21 @@ export class Range extends Component {
   // The Lean tab: a watch window on the live proof. The theorem as Lean has it, each board move as a step (✓ when Lean
   // accepted it, ✗ with Lean's error when not), and the goal as Lean prints it; at the end, Lean's "No goals" and
   // whether the whole proof compiled from scratch.
+  // the last start's timings, for the Lean tab: "Last start took 2:41: Starting a machine 0:35 · …"
+  bootText() {
+    const b = this.state.leanBoot || (this.props.lean && this.props.lean.boot); if (!b || !b.phases) return null;
+    const t = s => Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+    return 'Last start took ' + t(b.total) + ': ' + b.phases.map(p => p.label + ' ' + t(p.s)).join(' · ');
+  }
+  // Wake Lean early (C): on the first move, or opening a level, so it boots while you think. Once per page visit;
+  // only if it's asleep (not if it's off, capped, or already up).
+  preWake() {
+    const L = this.props.lean; if (!L || typeof L.wake !== 'function' || this._prewoke || this.props.legacy || this.props.demo) return;
+    const st = (this.state.leanStatus || L.status || {}).state;
+    if (st && st !== 'asleep') return;
+    this._prewoke = true;
+    L.wake();
+  }
   leanHtml(L) {
     const mono = "font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 14px; line-height: 20px; white-space: pre-wrap; word-break: break-word";
     const live = L.live; const goals = live.goals || [];
@@ -2542,6 +2559,7 @@ export class Range extends Component {
       <div style=${`display: flex; align-items: center; gap: 10px; font-size: 15px; color: ${live.state === 'error' ? '#FCA5A5' : '#CBD5E1'}`}>
         <span style=${`width: 10px; height: 10px; border-radius: 5px; flex: 0 0 auto; background: ${L.ready ? '#34D399' : '#94A3B8'}`}></span>${L.status}
       </div>
+      ${L.boot ? html`<div style="margin-top: 6px; font-size: 13px; line-height: 18px; color: #94A3B8">${L.boot}</div>` : null}
       ${live.theorem ? html`<div style=${`${mono}; margin-top: 12px; color: #94A3B8`}>${live.theorem}</div>` : null}
       ${live.steps && live.steps.length ? html`<div style="margin-top: 10px; display: flex; flex-direction: column; gap: 4px">
         ${live.steps.map((st, i) => html`<div style=${`${mono}; color: ${st.ok ? '#A7F3D0' : '#FCA5A5'}`}>${(i + 1) + '  ' + (st.ok ? '✓ ' : '✗ ') + ((st.hint && st.hint[0]) || 'rearrange') + (st.error ? '\n   ' + st.error : '')}</div>`)}
