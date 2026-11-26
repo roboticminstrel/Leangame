@@ -118,9 +118,9 @@ export function createLean({ fetch = globalThis.fetch ? globalThis.fetch.bind(gl
   async function flush() {
     while (sid && sent < history.length) {
       const m = history[sent++];
-      if (!m.from || !m.to) { setLive({ steps: live.steps.concat([{ ok: false, hint: m.hint, error: 'This position can’t be written in Lean yet' }]) }); continue; }
+      if (!m.from || !m.to || (Array.isArray(m.from) && !(m.from[0] && m.from[1] && m.to[0] && m.to[1]))) { setLive({ steps: live.steps.concat([{ ok: false, hint: m.hint, error: 'This position can’t be written in Lean yet' }]) }); continue; }
       lastTouch = now();
-      const r = await call('POST', '/check', { session: 'step', sid, from: m.from, to: m.to, hint: m.hint || [], witness: m.witness || null });
+      const r = await call('POST', '/check', { session: 'step', sid, from: m.from, to: m.to, hint: m.hint || [], witness: m.witness || null, target: m.target || null });
       if (r.state === 'asleep' || r.state === 'booting') { sent--; return; }
       if (r.error && /session ended/.test(r.error)) { beginLive(); return; }
       const stepRow = { ok: !!r.ok, hint: m.hint, error: r.ok ? null : r.error };
@@ -134,8 +134,10 @@ export function createLean({ fetch = globalThis.fetch ? globalThis.fetch.bind(gl
     if (status.state === 'ready') beginLive();
   }
 
-  function boardChanged(from, to, hint, witness) {
-    history.push({ from, to, hint, witness });
+  // target: null for the expression, { goal: true } for a move on the goal, { hyp: 'h1', bind } for one on a
+  // hypothesis (from/to are then [lhs, rhs])
+  function boardChanged(from, to, hint, witness, target) {
+    history.push({ from, to, hint, witness, target });
     if (sid) queue = queue.then(flush);
   }
 

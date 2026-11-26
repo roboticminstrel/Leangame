@@ -260,6 +260,49 @@ def step(frm, to, hint=None, nhyps=0):
     return f"refine Eq.trans (show {term(frm)} = {term(to)} by first | {alts}) ?_ <;> try with_reducible rfl"
 
 
+def _lemmas(nhyps):
+    lemmas = dict(RULES)
+    for i in range(1, min(int(nhyps or 0), 9) + 1):
+        lemmas[f"h{i}"] = [f"h{i}"]
+    return lemmas
+
+
+def _alts(hint, nhyps):
+    lemmas = _lemmas(nhyps)
+    hints = [h for h in (hint or []) if h in lemmas or h == ARITH]
+    rules = hints + [r for r in lemmas if r not in hints] + ([] if ARITH in hints else [ARITH])
+    return " | ".join(alternatives(rules, lemmas))
+
+
+def goal_step(frm, to, hint=None, nhyps=0):
+    """A move made on the goal (working backward): the goal `current = frm` becomes `current = to`, by proving
+    `to = frm` with the move's rule; closed at once when the goal now matches the current expression."""
+    _check(frm, to)
+    return f"refine Eq.trans ?_ (show {term(to)} = {term(frm)} by first | {_alts(hint, nhyps)}) <;> try with_reducible rfl"
+
+
+def hyp_step(name, frm, to, bind=None, hint=None, nhyps=0):
+    """A move made on a hypothesis: `name : l = r` becomes `name : l' = r'` (one side changed), proved from the old
+    one: l' = l, then the old hypothesis, then r = r'. bind: the vector name of a `∀ x : V,` hypothesis."""
+    if not isinstance(name, str) or not HYP.match(name):
+        raise BadInput("a hypothesis is h1 … h9")
+    if not (isinstance(frm, list) and isinstance(to, list) and len(frm) == 2 and len(to) == 2):
+        raise BadInput("a hypothesis move takes [lhs, rhs] before and after")
+    if bind is not None and (not isinstance(bind, str) or not NAME.match(bind)):
+        raise BadInput("a bound name is one letter, optionally followed by a digit")
+    (l1, r1), (l2, r2) = frm, to
+    _check(l1, l2)
+    _check(r1, r2)
+    _check(l1, r1)
+    alts = _alts(hint, nhyps)
+    side = lambda a, b: "rfl" if a == b else f"(show {term(a)} = {term(b)} by first | {alts})"
+    old = f"({name} {bind})" if bind else name
+    proof = f"Eq.trans {side(l2, l1)} (Eq.trans {old} {side(r1, r2)})"
+    if bind:
+        return f"replace {name} : ∀ {bind} : V, {term(l2)} = {term(r2)} := fun {bind} => {proof}"
+    return f"replace {name} : {term(l2)} = {term(r2)} := {proof}"
+
+
 def move(lhs, rhs, rule):
     """The Lean command that checks one move: `lhs` becomes `rhs` by `rule`."""
     return f"{statement(lhs, rhs)} := by\n  {tactic(rule)}"

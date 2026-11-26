@@ -90,6 +90,20 @@ class Live(unittest.TestCase):
         with self.assertRaises(render.BadInput):
             render.theorem(o, {"zero": True}, hyps=[[{"add": [x, o]}, x, "x; #eval"]])
 
+    def test_goal_and_hypothesis_steps(self):
+        o, x, z = {"v": "o"}, {"v": "x"}, {"zero": True}
+        g = render.goal_step(z, {"add": [o, z]}, ["h1"], nhyps=1)
+        self.assertTrue(g.startswith("refine Eq.trans ?_ (show (o + (0 : V)) = (0 : V) by first | "))
+        self.assertIn("rw [h1]", g)
+        h = render.hyp_step("h1", [{"add": [x, o]}, x], [{"add": [o, x]}, x], bind="x", nhyps=1)
+        self.assertTrue(h.startswith("replace h1 : ∀ x : V, (o + x) = x := fun x => Eq.trans (show (o + x) = (x + o) by first | "))
+        self.assertIn("(Eq.trans (h1 x) rfl)", h)
+        h2 = render.hyp_step("h2", [{"add": [x, o]}, z], [{"add": [o, x]}, z], nhyps=2)
+        self.assertIn("(Eq.trans h2 rfl)", h2)
+        for bad in [("h0", None), ("h1; #eval", None), ("h1", "x y")]:
+            with self.assertRaises(render.BadInput):
+                render.hyp_step(bad[0], [o, z], [o, z], bind=bad[1])
+
     def test_hypotheses(self):
         z = {"zero": True}
         t = render.theorem(v, {"v": "w2"}, hyps=[[{"add": [u, v]}, z]])

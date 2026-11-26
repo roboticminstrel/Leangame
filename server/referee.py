@@ -220,7 +220,18 @@ class Sessions:
             if errs0 or "proofState" not in r0:
                 return 200, {"ok": False, "error": (errs0 or ["Lean refused the witness"])[0][:400], "goals": None}
             s["ps"] = r0["proofState"]; s["tactics"].append(otac); s["nhyps"] += 1; s["obtained"].append(wit.get("name"))
-        tac = render.step(body.get("from"), body.get("to"), body.get("hint"), s.get("nhyps", 0))
+        target = body.get("target") or {}
+        if not isinstance(target, dict):
+            return 400, {"ok": False, "error": "target is an object"}
+        if target.get("goal"):
+            tac = render.goal_step(body.get("from"), body.get("to"), body.get("hint"), s.get("nhyps", 0))
+        elif target.get("hyp"):
+            h = target.get("hyp")
+            if not isinstance(h, str) or not render.HYP.match(h) or int(h[1:]) > s.get("nhyps", 0):
+                return 400, {"ok": False, "error": "no such hypothesis"}
+            tac = render.hyp_step(h, body.get("from"), body.get("to"), target.get("bind"), body.get("hint"), s.get("nhyps", 0))
+        else:
+            tac = render.step(body.get("from"), body.get("to"), body.get("hint"), s.get("nhyps", 0))
         r = self.repl.raw({"tactic": tac, "proofState": s["ps"]})
         errs = self.errors_of(r)
         if errs or "proofState" not in r:
@@ -422,6 +433,20 @@ def selftest():
     checks.append(("live: level 1.27 (unique inverse, with hypotheses h1 h2) played through, whole proof compiles", ru.get("ok") and ru.get("done") and ru.get("verified")))
     if not ru.get("done"):
         print("     level 1.27 stopped at", json.dumps(cur), "->", json.dumps(ru)[:600], json.dumps(stu)[:300], flush=True)
+    # factoring two terms that aren't next to each other: 0v + −(0v) + 0v → (0 + 0)v + −(0v) (a player's 1.30)
+    zv0 = {"smul": [n(0), w]}
+    code, sf = ss.start({"start": zv0, "goal": {"zero": True}})
+    sidf = sf.get("sid")
+    pre = [({"add": [zv0, {"zero": True}]}, ["add_zero"]), ({"add": [zv0, {"add": [{"neg": zv0}, zv0]}]}, ["add_neg_cancel"]),
+           ({"add": [zv0, {"neg": zv0}, zv0]}, None)]
+    cur, rf = zv0, {}
+    for nxt, hint in pre:
+        rf = ss.step({"sid": sidf, "from": cur, "to": nxt, "hint": hint})[1]
+        cur = nxt
+    rf = ss.step({"sid": sidf, "from": cur, "to": {"add": [{"smul": [{"add": [n(0), n(0)]}, w]}, {"neg": zv0}]}, "hint": ["add_smul"]})[1]
+    checks.append(("live: factoring terms that aren't neighbours (0v + −(0v) + 0v → (0 + 0)v + −(0v))", rf.get("ok")))
+    if not rf.get("ok"):
+        print("     non-adjacent factor:", json.dumps(rf)[:1500], flush=True)
     # level 1.26: (h1 : ∀ x : V, x + o = x) : o = 0, the book's way: o → o + 0 → 0 + o → 0
     O, X = {"v": "o"}, {"v": "x"}
     seq26 = [({"add": [O, {"zero": True}]}, ["add_zero"]), ({"add": [{"zero": True}, O]}, None), ({"zero": True}, ["h1"])]
@@ -435,6 +460,16 @@ def selftest():
     checks.append(("live: level 1.26 (unique 0, a ∀ hypothesis) played through, whole proof compiles", r26.get("ok") and r26.get("done") and r26.get("verified")))
     if not r26.get("done"):
         print("     level 1.26 stopped at", json.dumps(cur), "->", json.dumps(r26)[:600], json.dumps(st26)[:300], flush=True)
+    # level 1.26 again, with a hypothesis move and a goal move: h1 : ∀ x, x + o = x becomes ∀ x, o + x = x
+    # (replace h1); the goal 0 becomes o + 0 (by the new h1, backward); the expression o becomes o + 0: they meet
+    code, sg = ss.start({"start": O, "goal": {"zero": True}, "hyps": [[{"add": [X, O]}, X, "x"]]})
+    sid = sg.get("sid")
+    rh = ss.step({"sid": sid, "from": [{"add": [X, O]}, X], "to": [{"add": [O, X]}, X], "hint": None, "target": {"hyp": "h1", "bind": "x"}})[1]
+    rg1 = ss.step({"sid": sid, "from": {"zero": True}, "to": {"add": [O, {"zero": True}]}, "hint": ["h1"], "target": {"goal": True}})[1]
+    rg2 = ss.step({"sid": sid, "from": O, "to": {"add": [O, {"zero": True}]}, "hint": ["add_zero"]})[1]
+    checks.append(("live: a hypothesis move (replace h1) and a goal move, then the goal meets the expression", rh.get("ok") and rg1.get("ok") and rg2.get("ok") and rg2.get("done") and rg2.get("verified")))
+    if not rg2.get("done"):
+        print("     hyp/goal moves:", json.dumps(rh)[:400], json.dumps(rg1)[:400], json.dumps(rg2)[:400], flush=True)
     # level 1.30 without negatives: 0v → 0v + 0 → (obtain y1, h1 : 0v + y1 = 0) 0v + (0v + y1) → 0v + 0v + y1
     # → (0 + 0)v + y1 → 0v + y1 → 0
     Y = {"v": "y1"}
