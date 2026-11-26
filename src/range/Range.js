@@ -86,6 +86,8 @@ export class Range extends Component {
   // The board as a tree for the Lean server (server/render.py), in reading order; null where Lean can't write it yet
   // (½, 𝑖, a vector without a one-letter name)
   leanTree(n) {
+    const one = this._leanOne && this._leanOne.get(n.id);
+    if (one) { this._leanOne.delete(n.id); const t = this.leanTree(n); this._leanOne.set(n.id, one); return t && (one === 'smul' ? { smul: [{ n: 1 }, t] } : { mul: [t, { n: 1 }] }); }
     if (n.t === 's') {
       const v = String(n.val);
       if (/^-?\d+$/.test(v)) return { n: parseInt(v, 10) };
@@ -371,7 +373,7 @@ export class Range extends Component {
     if (this._histKey == null) this._histKey = key;
     if (key === this._histKey) { this._hint = null; return; }
     this._histKey = key;
-    const t = this.wsTree(); const from = this._leanTree; this._leanTree = t;
+    const t = this.wsTree(); let from = this._leanTree; this._leanTree = t;
     const St = this.state; const ws = St.ws || 'expr';
     const R = this._restoring; this._restoring = null;
     let steps;
@@ -379,8 +381,11 @@ export class Range extends Component {
     else {
       steps = [];
       // a cancellation goes to Lean in two steps: first the terms rearranged so the pair sits together, then the law
-      const mid = this._leanMid; this._leanMid = null;
+      let mid = this._leanMid; this._leanMid = null;
       const sg = this._splitGroup; this._splitGroup = null;
+      // a bare term the move treats as 1·𝑣 (or 𝑎·1): Lean first gets it written that way
+      const pre = this._leanPre; this._leanPre = null;
+      if (pre && JSON.stringify(pre[0]) !== JSON.stringify(from)) { steps.push([from, pre[0], pre[1]]); from = pre[0]; }
       if (sg) {
         // a split: the law makes the pair as one bracket, then the bracket opens into the sum or product (a witness
         // from the inverse axiom is obtained first, with that step)
@@ -1135,11 +1140,27 @@ export class Range extends Component {
   // them together, bracketed, where the first of them was; then the law.
   leanPairUp(orig, pv) {
     const ids = pv.type === 'collectV' ? pv.matched : Object.keys(pv.matches || {});
+    // factoring treats a bare 𝑣 as 1·𝑣 (and a bare scalar 𝑎, all of it factored out, as 𝑎·1): Lean needs that written
+    const find = id => { const l = this.locate(orig, id); return l && l.node; };
+    const bare = new Map();
+    ids.forEach(id => {
+      const U = find(id); if (!U) return;
+      if (pv.type === 'collectV' && U.t === 'v') bare.set(id, 'smul');
+      if (pv.type === 'collect' && U.t === 's' && (pv.matches[id] || []).indexOf(id) >= 0) bare.set(id, 'mul');
+    });
     // the order as it was before the drag (the dragged term now sits on its target)
     let key, ents;
     if (pv.cont.type === 'sum') { const S = this.locate(orig, pv.cont.id).node; key = S.id; ents = S.terms; }
     else { key = this.zoneKeyOf(pv.cont.ids[0]) || 'zone'; ents = pv.cont.ids.map(id => orig.find(t => t.node.id === id)).filter(Boolean); }
     const order = ents.slice().sort((a, b) => Math.abs(a.y - b.y) > 60 ? a.y - b.y : a.x - b.x).map(t => t.node.id);
+    if (bare.size) {
+      this._leanOne = bare; this._orderOverride = { key: key, ids: order };
+      this._leanPre = [this.wsTree(), pv.type === 'collectV' ? ['one_smul'] : ['mul_one']];
+      this._orderOverride = null;
+    }
+    try { this.leanPairUpOrder(key, order, ids); } finally { this._leanOne = null; this._orderOverride = null; }
+  }
+  leanPairUpOrder(key, order, ids) {
     if (ids.length < 2 || ids.length >= order.length) return;
     if (order.slice(0, ids.length).every(id => ids.indexOf(id) >= 0)) return; // already together at the front
     const together = order.filter(id => ids.indexOf(id) >= 0), rest = order.filter(id => ids.indexOf(id) < 0);

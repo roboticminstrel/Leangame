@@ -1397,3 +1397,24 @@ test('factoring terms that aren\'t together: Lean first gets them brought togeth
     [{ add: [zv, { neg: zv }, zv] }, { add: [{ add: [zv, zv] }, { neg: zv }] }, null],
     [{ add: [{ add: [zv, zv] }, { neg: zv }] }, { add: [{ smul: [{ add: [{ n: 0 }, { n: 0 }] }, { v: 'v' }] }, { neg: zv }] }, ['add_smul']]]);
 });
+
+test('factoring a bare vector: Lean first gets it written 1·𝑣 (one_smul), then the law', () => {
+  const calls = [];
+  const lean = { setLevel: () => {}, boardChanged: (f, t, h) => calls.push([f, t, h]), subscribe: () => () => {} };
+  const store = freshStore({ v: 2, done: levelsMod.START_DONE.concat(['1.27', '1.30']), current: '1.32', places: {} });
+  const c = makeLive({ store, lean }); after(c); c.initLean();
+  const T = c.state.tops[0].node;
+  dragPiece(c, 'PZ', ...centre(c, T.vec.id)); after(c);
+  tap(c, T.vec.id);
+  const z = c.state.tops.find(t => t.node.key === 'zero').node;
+  dragTree(c, '𝑣', ...centre(c, z.id)); after(c);
+  assert.deepEqual(readout(c), ['−1𝑣 + 𝑣 + −𝑣']);
+  const lone = c.state.tops.find(t => t.node.t === 'v' && !t.node.neg).node;
+  const n0 = calls.length;
+  dragTo(c, lone.id, ...centre(c, T.vec.id)); after(c);
+  assert.deepEqual(readout(c), ['(−1 + 1)𝑣 + −𝑣']);
+  const v = { v: 'v' }, m1 = { smul: [{ n: -1 }, v] }, nv = { neg: v };
+  assert.deepEqual(calls.slice(n0), [
+    [{ add: [m1, v, nv] }, { add: [m1, { smul: [{ n: 1 }, v] }, nv] }, ['one_smul']],
+    [{ add: [m1, { smul: [{ n: 1 }, v] }, nv] }, { add: [{ smul: [{ add: [{ n: -1 }, { n: 1 }] }, v] }, nv] }, ['add_smul']]]);
+});

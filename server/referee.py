@@ -467,6 +467,14 @@ def selftest():
     rq = ss.step({"sid": sq.get("sid"), "from": w, "to": {"add": [w, w]}, "hint": ["add_smul"]})[1]  # v = v + v: false
     took = time.time() - t0
     checks.append((f"live: a wrong step is refused quickly ({took:.1f}s, under 15)", not rq.get("ok") and took < 15))
+    # factoring a bare v with −1·v (a player's 1.32): v is first written 1·v, then the law
+    m1v, nvv = {"smul": [n(-1), w]}, {"neg": w}
+    code, sb = ss.start({"start": {"add": [m1v, w, nvv]}, "goal": nvv})
+    rb1 = ss.step({"sid": sb.get("sid"), "from": {"add": [m1v, w, nvv]}, "to": {"add": [m1v, {"smul": [n(1), w]}, nvv]}, "hint": ["one_smul"]})[1]
+    rb2 = ss.step({"sid": sb.get("sid"), "from": {"add": [m1v, {"smul": [n(1), w]}, nvv]}, "to": {"add": [{"smul": [{"add": [n(-1), n(1)]}, w]}, nvv]}, "hint": ["add_smul"]})[1]
+    checks.append(("live: factoring a bare v (−1v + v + −v → −1v + 1v + −v → (−1 + 1)v + −v)", rb1.get("ok") and rb2.get("ok")))
+    if not (rb1.get("ok") and rb2.get("ok")):
+        print("     bare v:", json.dumps(rb1)[:600], json.dumps(rb2)[:600], flush=True)
     # level 1.26: (h1 : ∀ x : V, x + o = x) : o = 0, the book's way: o → o + 0 → 0 + o → 0
     O, X = {"v": "o"}, {"v": "x"}
     seq26 = [({"add": [O, {"zero": True}]}, ["add_zero"]), ({"add": [{"zero": True}, O]}, None), ({"zero": True}, ["h1"])]
