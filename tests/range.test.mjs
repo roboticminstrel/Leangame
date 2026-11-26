@@ -1418,3 +1418,80 @@ test('factoring a bare vector: Lean first gets it written 1·𝑣 (one_smul), th
     [{ add: [m1, v, nv] }, { add: [m1, { smul: [{ n: 1 }, v] }, nv] }, ['one_smul']],
     [{ add: [m1, { smul: [{ n: 1 }, v] }, nv] }, { add: [{ smul: [{ add: [{ n: -1 }, { n: 1 }] }, v] }, nv] }, ['add_smul']]]);
 });
+
+// 1.34: a card from ASSUMPTIONS (or the tray) dropped on a tile
+function dragCard(c, name, tx, ty) {
+  c.setState({ trayOpen: true, trayTab: 'tray' });
+  const h = c.renderVals().tray.hyps.find(x => x.text.startsWith(name + ' :'));
+  assert.ok(h, 'card ' + name);
+  h.down(ev(0, 0)); c.hmove(ev(tx / 2, ty / 2)); c.renderVals(); c.hmove(ev(tx, ty)); c.renderVals();
+  const hover = c.state.zeroHover; c.hend(); c.renderVals(); return hover;
+}
+const make134 = (goal, lean, done) => {
+  const store = freshStore({ v: 2, done: levelsMod.START_DONE.concat(['1.27', '1.30', '1.32'], done || []), current: '1.34/' + goal, places: {} });
+  const c = makeLive({ store, lean }); after(c); if (lean) c.initLean(); return c;
+};
+
+test('1.34, goal 7 (−𝑢 ∈ 𝑈): 1.32 turns −𝑢 into (−1)𝑢, hs leaves 𝑢, hu closes it; Lean gets each as a step', () => {
+  const calls = [];
+  const lean = { setLevel: (a, g, hy, m) => calls.push(['level', a, g, hy, m]), boardChanged: (f, t, h, w, tg) => calls.push(['move', f, t, h, tg]), subscribe: () => () => {} };
+  const c = make134(7, lean);
+  let v = c.renderVals();
+  assert.equal(v.heads[1].title, 'GOAL 7 OF 12 · 1.34 · ⇐');
+  assert.equal(v.goalChips.items.length, 12);
+  assert.ok(v.goalChips.items[6].cur);
+  assert.deepEqual(readout(c), ['−𝑢 ∈ 𝑈']);
+  assert.deepEqual(calls[0].slice(1), [{ neg: { v: 'u' } }, null, [], { ctx: 'closed', mems: ['u'], scalars: [], vectors: [] }]);
+  const u = () => c.state.tops[0].node;
+  dragCard(c, 'hu', ...centre(c, u().id));                       // hu doesn't fit −𝑢
+  assert.deepEqual(readout(c), ['−𝑢 ∈ 𝑈']);
+  dragCard(c, '1.32', ...centre(c, u().id)); after(c);           // −𝑢 = (−1)𝑢
+  assert.deepEqual(readout(c), ['−1𝑢 ∈ 𝑈']);
+  dragCard(c, 'hs', ...centre(c, u().vec.id)); after(c);         // enough: 𝑢 ∈ 𝑈
+  assert.deepEqual(readout(c), ['𝑢 ∈ 𝑈']);
+  dragCard(c, 'hu', ...centre(c, u().id)); after(c);             // and that's hu
+  assert.deepEqual(readout(c), ['no goals left']);
+  assert.equal(c.renderVals().won, true);
+  assert.ok(c.prog.done.includes('1.34/7') && !c.prog.done.includes('1.34'));
+  assert.deepEqual(calls.filter(x => x[0] === 'move').map(x => [x[3], x[4]]),
+    [[['neg_one_smul'], { row: 0 }], [['hs'], { row: 0, card: 'hs' }], [['hu'], { row: 0, card: 'hu' }]]);
+  assert.deepEqual(calls[1].slice(1, 3), [{ neg: { v: 'u' } }, { smul: [{ n: -1 }, { v: 'u' }] }]);
+});
+
+test('1.34, goal 5 (𝑢 + 𝑤 ∈ 𝑈): ha splits it into two goals, one row each; close them in any order', () => {
+  const calls = [];
+  const lean = { setLevel: () => {}, boardChanged: (f, t, h, w, tg) => calls.push(tg), subscribe: () => () => {} };
+  const c = make134(5, lean);
+  assert.deepEqual(readout(c), ['𝑢 + 𝑤 ∈ 𝑈']);
+  const w = () => c.state.tops.find(t => t.node.key === 'w').node, u = () => c.state.tops.find(t => t.node.key === 'u').node;
+  dragCard(c, 'ha', ...centre(c, u().id)); after(c);
+  assert.deepEqual(readout(c), ['𝑢 ∈ 𝑈,   𝑤 ∈ 𝑈']);
+  assert.equal(c.renderVals().memSigns.length, 2);
+  dragCard(c, 'hw', ...centre(c, w().id)); after(c);             // the second goal first
+  assert.deepEqual(readout(c), ['𝑢 ∈ 𝑈']);
+  dragCard(c, 'hu', ...centre(c, u().id)); after(c);
+  assert.equal(c.renderVals().won, true);
+  assert.deepEqual(calls, [{ row: 0, card: 'ha' }, { row: 1, card: 'hw' }, { row: 0, card: 'hu' }]);
+  // undo on a membership board replays the live proof instead of reversing a card
+  c.undo(); after(c);
+  assert.deepEqual(readout(c), ['𝑢 ∈ 𝑈']);
+});
+
+test('1.34, ⇒ (from h : 𝑈 is a subspace): h does whatever fits, 0 ∈ 𝑈 at once; ⇐ laws are ordinary moves; all twelve win the level', () => {
+  const c = make134(1, null, ['1.34/2', '1.34/3', '1.34/4', '1.34/5', '1.34/6', '1.34/7', '1.34/9', '1.34/10', '1.34/11', '1.34/12']);
+  assert.deepEqual(readout(c), ['0 ∈ 𝑈']);
+  dragCard(c, 'h', ...centre(c, c.state.tops[0].node.id)); after(c);
+  assert.equal(c.renderVals().won, true);
+  assert.ok(!c.prog.done.includes('1.34'));
+  // goal 8, 𝑢 + 𝑤 = 𝑤 + 𝑢: the order counts, so it isn't won before the move
+  c.renderVals().goalChips.items[7].tap(); after(c);
+  assert.equal(c.state.level, '1.34/8');
+  assert.deepEqual(readout(c), ['𝑢 + 𝑤']);
+  assert.equal(c.renderVals().won, false);
+  const u = c.state.tops.find(t => t.node.key === 'u').node, w = c.state.tops.find(t => t.node.key === 'w').node;
+  c.renderVals(); const pw = c.P.get(w.id);
+  dragTo(c, u.id, pw.x + pw.w + 26 + 60, pw.y + 44); after(c);
+  assert.deepEqual(readout(c), ['𝑤 + 𝑢']);
+  assert.equal(c.renderVals().won, true);
+  assert.ok(c.prog.done.includes('1.34'), 'every goal done: 1.34 is won');
+});

@@ -4,7 +4,7 @@ import { Component } from '../../vendor/preact.mjs';
 import { html } from '../html.js';
 import { ConceptGraph } from '../graph/ConceptGraph.js';
 import { LeanPlay } from '../lean/LeanPlay.js';
-import { LEVELS, progressFrom, browserStore, memoryStore } from '../levels.js';
+import { LEVELS, GOALS, parentOf, progressFrom, browserStore, memoryStore } from '../levels.js';
 
 export class Range extends Component {
   constructor(props) {
@@ -52,7 +52,7 @@ export class Range extends Component {
       this.hist = this.props.demo ? { entries: [{ tops: this.clone(tops), steps: [] }], idx: 0 } : L.hist;
       return Object.assign(base, {
         rules: true, trayOpen: false, trayTab: 'tray', trayItems: [], trayNew: {}, slides: {}, tiles: { assume: true, goal: true },
-        level: level, ws: L.ws || 'expr', boards: L.boards || {}, goal: this.props.demo ? this.mkV('𝑉', '0', 'zero', 'R', 110) : L.goal, hyps: this.props.demo ? [] : L.hyps, vars: this.props.demo ? null : L.vars, scalars: this.props.demo ? null : L.scalars,
+        level: level, ws: L.ws || 'expr', boards: L.boards || {}, mem: this.props.demo ? null : (L.mem || null), memRows: L.memRows || 1, sets: this.props.demo ? null : (L.sets || null), goal: this.props.demo ? this.mkV('𝑉', '0', 'zero', 'R', 110) : L.goal, hyps: this.props.demo ? [] : L.hyps, vars: this.props.demo ? null : L.vars, scalars: this.props.demo ? null : L.scalars,
         tops: tops,
         pieces: [
           { id: 'PZS', kind: 'zeroS', x: 30, y: 600, hx: 30, hy: 600 },
@@ -140,24 +140,35 @@ export class Range extends Component {
     return ns.slice().sort((a, b) => Math.abs(pos(a).y - pos(b).y) > 60 ? pos(a).y - pos(b).y : pos(a).x - pos(b).x);
   }
   leanList(ns) { const ts = ns.map(n => this.leanTree(n)); return ts.length === 1 ? ts[0] : { add: ts }; }
-  leanHyps() { return (this.state.hyps || []).filter(h => !h.wit).map(h => [this.leanList(h.lhs), this.leanList(h.rhs)].concat(h.bind ? [h.bind] : [])); }
+  leanHyps() { return (this.state.hyps || []).filter(h => !h.wit && !h.kind).map(h => [this.leanList(h.lhs), this.leanList(h.rhs)].concat(h.bind ? [h.bind] : [])); }
   zoneTree() { return this.leanSum(this.state.tops.filter(t => this.zoneIds.indexOf(t.node.id) >= 0).map(t => t.node), 'zone'); }
   // ---------- workspaces: the expression, the goal and each hypothesis each have a board; one is in the box at a
   // time. A hypothesis's board is its equation in two rows (its left side, then = and its right side), each row a
   // chain of its own ('zone' and 'zoneR'); the others have one chain ('zone').
   isHypWs(ws) { return !!ws && ws !== 'expr' && ws !== 'goal'; }
   zm(ws) { return this.isHypWs(ws === undefined ? this.state.ws : ws) ? this.K.ZT + 239 : Infinity; }
+  // The board's rows: where one ends and the next begins. A hypothesis has two (its sides); a membership goal (1.34)
+  // one per open goal (memRows: given, or the state's; 0 means not a membership board); otherwise one.
+  rowCuts(ws, memRows) {
+    ws = ws === undefined ? this.state.ws : ws;
+    if (this.isHypWs(ws)) return [this.K.ZT + 239];
+    const n = memRows !== undefined ? memRows : (this.state.mem && (!ws || ws === 'expr') ? (this.state.memRows || 1) : 0);
+    return Array.from({ length: Math.max(0, n - 1) }, (_, i) => this.K.ZT + 239 + 160 * i);
+  }
+  rowOf(cy, cuts) { return cuts.filter(c => cy >= c).length; }
+  rowKey(i) { return i === 0 ? 'zone' : i === 1 ? 'zoneR' : 'zone' + i; }
   zoneSetOf(id) { return (this.zoneSets || []).find(z => z.ids.indexOf(id) >= 0) || null; }
   inZone(id) { return !!this.zoneSetOf(id); }
   zoneMates(id) { const z = this.zoneSetOf(id); return z ? z.ids : []; }
   zoneKeyOf(id) { const z = this.zoneSetOf(id); return z ? z.key : null; }
-  isZoneKey(k) { return k === 'zone' || k === 'zoneR'; }
+  isZoneKey(k) { return typeof k === 'string' && k.indexOf('zone') === 0; }
   zoneNodes(key, tops) {
     const z = (this.zoneSets || []).find(x => x.key === key); const ts = tops || this.state.tops;
     return z ? this.readingOrder(z.ids.map(id => (ts.find(t => t.node.id === id) || {}).node).filter(Boolean), key) : [];
   }
   // what Lean sees of the board in the box: a tree, or [lhs, rhs] for a hypothesis
   wsTree() {
+    if (this.state.mem && (!this.state.ws || this.state.ws === 'expr')) return (this.zoneSets || []).map(z => this.leanSum(this.zoneNodes(z.key), z.key));
     if (this.isHypWs(this.state.ws)) return [this.leanSum(this.zoneNodes('zone'), 'zone'), this.leanSum(this.zoneNodes('zoneR'), 'zoneR')];
     return this.zoneTree();
   }
@@ -165,7 +176,18 @@ export class Range extends Component {
   boardRun(tops) { const K = this.K; return tops.filter(t => { const m = this.measure(t.node); const cy = t.y + m.h / 2; return cy > K.ZT && cy < K.ZB; }).sort((a, b) => Math.abs(a.y - b.y) > 60 ? a.y - b.y : a.x - b.x).map(t => t.node); }
   exprRun() { const St = this.state; return (!St.ws || St.ws === 'expr') ? this.zoneNodes('zone') : this.boardRun((St.boards || {}).expr || []); }
   runCanon(ns) { return ns.length === 1 ? this.canon(ns[0]) : 'g(' + ns.map(n => this.canon(n)).sort().join('+') + ')'; }
-  isWon() { const St = this.state; if (this.props.legacy || !St.goal) return false; const run = this.exprRun(); return run.length > 0 && this.runCanon(run) === this.canon(St.goal); }
+  isWon() {
+    const St = this.state; if (this.props.legacy) return false;
+    if (St.mem) return (St.memRows || 0) === 0;   // a membership goal: won when no goal is left open
+    if (!St.goal) return false;
+    const run = this.exprRun(); if (!run.length) return false;
+    const L = LEVELS[St.level];
+    if (L && L.ordered) {   // the goal is a reordering (𝑢 + 𝑤 = 𝑤 + 𝑢): the order counts
+      const g = St.goal.t === 'sum' && !this.flagged(St.goal) ? St.goal.terms.map(t => t.node) : [St.goal];
+      return run.map(n => this.okey(n)).join(' + ') === g.map(n => this.okey(n)).join(' + ');
+    }
+    return this.runCanon(run) === this.canon(St.goal);
+  }
   wsTitle(ws) { if (!ws || ws === 'expr') return 'EXPRESSION'; if (ws === 'goal') return 'GOAL · ' + (this.state.level || ''); const h = (this.state.hyps || []).find(x => x.name === ws); return 'HYPOTHESIS ' + (h ? h.label : ''); }
   // a board seen for the first time: the goal's terms in a row, or a hypothesis's sides in two
   wsStart(target, goalIn, hypsIn) {
@@ -180,7 +202,8 @@ export class Range extends Component {
   switchWs(target, opts) {
     const St = this.state; const cur = St.ws || 'expr';
     if (!target || target === cur || this.drag || this.idrag || this.hdrag || St.wsAnim) return;
-    if (this.isHypWs(target) && !(St.hyps || []).some(h => h.name === target)) return;
+    if (this.isHypWs(target) && !(St.hyps || []).some(h => h.name === target && !h.kind)) return;
+    if (target === 'goal' && !St.goal) return;
     const boards = Object.assign({}, St.boards || {}, { [cur]: this.clone(St.tops) });
     const next = boards[target] ? this.clone(boards[target]) : this.wsStart(target);
     const commit = () => { this._wsSwitch = true; this.setState({ ws: target, boards: boards, tops: this.normTops(this.tidy(next, target)), tree: null, zeroHover: null, preview: null, slides: {}, slide: null }); };
@@ -238,9 +261,21 @@ export class Range extends Component {
   layoutFor(id, hyps) {
     const L = LEVELS[id] || LEVELS['1.30']; const b = L.build(this);
     if (!hyps) { const pl = this.prog.places[L.id]; const e = pl && pl.entries && pl.entries[pl.idx]; hyps = (e && e.hyps) || b.hyps || []; }
-    const rows = (b.vars ? 1 : 0) + (hyps.some(h => !h.wit) ? 1 : 0) + hyps.filter(h => h.wit).length;
-    const extra = rows * 58;
-    Object.assign(this.K, { AY: 84, GY: 192 + extra, ZT: 300 + extra, ZB: 700 + extra });
+    const rows = (b.vars || b.sets ? 1 : 0) + this.hypRows(hyps.filter(h => !h.wit)).length + hyps.filter(h => h.wit).length;
+    const extra = rows * 58, chips = L.parent ? 52 : 0; // a goal of a multi-goal level: a line of goal chips under GOAL
+    Object.assign(this.K, { AY: 84, GY: 192 + extra, ZT: 300 + extra + chips, ZB: 700 + extra + chips + (b.mem ? 480 : 0) });
+  }
+  // a hypothesis's text in ASSUMPTIONS, and the lines they take (as many as fit on one line, ~40 characters)
+  hypText(h) {
+    if (h.text) return '(' + h.text + ')';
+    const side = ns => this.exprText(ns, true);
+    return '(' + h.label + ' : ' + (h.forall || '') + side(h.lhs) + ' = ' + side(h.rhs) + ')';
+  }
+  hypRows(own) {
+    const rows = []; let cur = [], n = 0;
+    own.forEach(h => { const k = [...this.hypText(h)].length + 3; if (cur.length && n + k > 42) { rows.push(cur); cur = []; n = 0; } cur.push(h); n += k; });
+    if (cur.length) rows.push(cur);
+    return rows;
   }
   // the header grew or shrank (a witness line came or went): everything below moves by the same amount
   relayout(hyps, tops) {
@@ -257,13 +292,13 @@ export class Range extends Component {
   loadLevel(id) {
     const L = LEVELS[id] || LEVELS['1.30'];
     const b = L.build(this);
-    const extra = { goal: b.goal, hyps: b.hyps || [], vars: b.vars || null, scalars: b.scalars || null };
+    const extra = { goal: b.goal, hyps: b.hyps || [], vars: b.vars || null, scalars: b.scalars || null, mem: b.mem || null, sets: b.sets || null, memRows: 1 };
     const place = this.prog.places[L.id];
     if (place && place.entries && place.entries[place.idx]) {
       this.bumpUid(place.entries);
       const e = place.entries[place.idx];
       return Object.assign(extra, { tops: this.clone(e.tops), hyps: e.hyps ? this.clone(e.hyps) : extra.hyps, goal: e.goal ? this.clone(e.goal) : extra.goal,
-        ws: e.ws || 'expr', boards: e.boards ? this.clone(e.boards) : {}, hist: { entries: place.entries, idx: place.idx } });
+        ws: e.ws || 'expr', boards: e.boards ? this.clone(e.boards) : {}, memRows: e.memRows != null ? e.memRows : 1, hist: { entries: place.entries, idx: place.idx } });
     }
     const tops = b.start.map((n, i) => ({ node: n, x: 24 + i * 200, y: this.K.ZT + 110 }));
     return Object.assign(extra, { tops: tops, hist: { entries: [{ tops: this.clone(tops), steps: [] }], idx: 0 } });
@@ -285,7 +320,8 @@ export class Range extends Component {
     const L = this.loadLevel(id);
     this.layoutFor(id, L.hyps);
     this.hist = L.hist; this._histKey = null; this._resync = true;
-    this.setState({ level: id, goal: L.goal, hyps: L.hyps, vars: L.vars, scalars: L.scalars, ws: L.ws || 'expr', boards: L.boards || {}, wsAnim: null, tops: this.normTops(this.tidy(L.tops, L.ws || 'expr')), tree: null, trayClosing: true, histAnim: true, zeroHover: null, preview: null });
+    this.setState({ level: id, goal: L.goal, hyps: L.hyps, vars: L.vars, scalars: L.scalars, ws: L.ws || 'expr', boards: L.boards || {}, wsAnim: null, mem: L.mem, memRows: L.memRows, sets: L.sets,
+      tops: this.normTops(this.tidy(L.tops, L.ws || 'expr', L.mem ? L.memRows : 0)), tree: null, trayClosing: true, histAnim: true, zeroHover: null, preview: null });
     clearTimeout(this._tc); this._tc = setTimeout(() => this.setState({ trayOpen: false, trayClosing: false, trayTab: 'tray' }), 220);
     clearTimeout(this._ha); this._ha = setTimeout(() => this.setState({ histAnim: false }), 450);
     this.prog.current = id; this.store.save(this.prog);
@@ -305,6 +341,8 @@ export class Range extends Component {
   undo() {
     if (!this.canUndo() || this.drag) return;
     const e = this.hist.entries[this.hist.idx]; this.hist.idx--;
+    // a membership board's cards can't be undone in Lean: the live proof is replayed up to here instead
+    if (this.state.mem) { this._resync = true; this.restore(this.hist.entries[this.hist.idx], null, this.state.ws || 'expr'); return; }
     // one chain for every board: the board in the box stays there (a move undone on another board only changes its
     // text in the header)
     this.restore(this.hist.entries[this.hist.idx], { steps: e.steps.slice().reverse().map(st => [st[1], st[0], st[2], null, st[4] || null]) }, this.state.ws || 'expr');
@@ -312,6 +350,7 @@ export class Range extends Component {
   redo() {
     if (!this.canRedo() || this.drag) return;
     this.hist.idx++; const e = this.hist.entries[this.hist.idx];
+    if (this.state.mem) { this._resync = true; this.restore(e, null, this.state.ws || 'expr'); return; }
     this.restore(e, { steps: e.steps }, this.state.ws || 'expr');
   }
   // all the way back to the start; redo still walks forward until a new move overwrites what's ahead
@@ -331,21 +370,23 @@ export class Range extends Component {
     // the board to show: the one asked for, if it exists at that moment (a witness may not yet), else the expression
     const want = wsWanted && (wsWanted === 'goal' || wsWanted === 'expr' || hyps.some(h => h.name === wsWanted)) ? wsWanted : (wsWanted ? 'expr' : ws);
     if (want !== ws) { boards[ws] = tops; tops = boards[want] ? boards[want] : this.wsStart(want, goal, hyps); delete boards[want]; ws = want; }
-    this.setState({ hyps: hyps, goal: goal, ws: ws, boards: boards, wsAnim: null,
-      tops: this.normTops(this.tidy(tops, ws)), histAnim: true, zeroHover: null, preview: null, slide: null, slides: {} });
+    const memRows = entry.memRows != null ? entry.memRows : 1;
+    this.setState({ hyps: hyps, goal: goal, ws: ws, boards: boards, wsAnim: null, memRows: memRows,
+      tops: this.normTops(this.tidy(tops, ws, this.state.mem ? memRows : 0)), histAnim: true, zeroHover: null, preview: null, slide: null, slides: {} });
     clearTimeout(this._ha); this._ha = setTimeout(() => this.setState({ histAnim: false }), 450);
   }
   // aligned spots: the expression's terms in one row, in reading order, brackets lined up inside
-  tidy(tops, ws) {
-    const K = this.K; const ZM = this.zm(ws);
+  tidy(tops, ws, memRows) {
+    const K = this.K; const cuts = this.rowCuts(ws, memRows);
     const cyOf = t => t.y + this.measure(t.node).h / 2;
     const inZone = t => { const cy = cyOf(t); return cy > K.ZT && cy < K.ZB; };
     const zone = tops.filter(inZone).sort((a, b) => Math.abs(a.y - b.y) > 60 ? a.y - b.y : a.x - b.x);
-    // one row; a hypothesis gets two, its left side and (after the =) its right side
-    const rows = ZM < Infinity ? [zone.filter(t => cyOf(t) < ZM), zone.filter(t => cyOf(t) >= ZM)] : [zone];
+    // one row; a hypothesis gets two, its left side and (after the =) its right side; a membership board one per goal
+    const rows = Array.from({ length: cuts.length + 1 }, (_, i) => zone.filter(t => this.rowOf(cyOf(t), cuts) === i));
+    const hyp = this.isHypWs(ws === undefined ? this.state.ws : ws);
     rows.forEach((row, ri) => {
       const cy = K.ZT + 110 + 49 + ri * 160;
-      let x = 24 + (ri ? 56 : 0) + (row[0] && this.negCluster(row[0].node) ? 46 : 0);
+      let x = 24 + (ri && hyp ? 56 : 0) + (row[0] && this.negCluster(row[0].node) ? 46 : 0);
       row.forEach(t => {
         this.walk(t.node, m => { if (m.t === 'sum') this.rowArrange(m); }, null, null);
         const m = this.measure(t.node); t.x = x; t.y = cy - m.h / 2; x += m.w + K.GAP;
@@ -357,6 +398,9 @@ export class Range extends Component {
   checkWin() {
     if (this.isWon() && this.prog.done.indexOf(this.state.level) < 0) {
       this.prog.done = this.prog.done.concat([this.state.level]);
+      // the last goal of a multi-goal level: the level is won
+      const par = parentOf(this.state.level);
+      if (par !== this.state.level && GOALS[par].every(id => this.prog.done.indexOf(id) >= 0) && this.prog.done.indexOf(par) < 0) this.prog.done = this.prog.done.concat([par]);
     }
   }
   // After each finished move (nothing being dragged): if the expression changed, record it in the level's history
@@ -408,8 +452,18 @@ export class Range extends Component {
         target = { hyp: ws, bind: (h0 && h0.bind) || null };
       }
       steps = steps.map(st => [st[0], st[1], st[2], st[3] || null, target]);
+      if (St.mem && ws === 'expr') {
+        // a membership board: a card is a step of its own; a rewrite is a step on the row it changed
+        const ms = this._memStep; this._memStep = null;
+        if (ms) steps = [[null, null, [ms.card], null, ms]];
+        else steps = steps.map(st => {
+          const f = st[0], tt = st[1]; let k = 0;
+          if (Array.isArray(f) && Array.isArray(tt)) { k = f.findIndex((x, i) => JSON.stringify(x) !== JSON.stringify(tt[i])); if (k < 0) k = 0; }
+          return [Array.isArray(f) ? f[k] : f, Array.isArray(tt) ? tt[k] : tt, st[2], st[3] || null, { row: k }];
+        });
+      }
       const H = this.hist;
-      H.entries = H.entries.slice(0, H.idx + 1).concat([{ tops: this.clone(St.tops), steps: steps, hyps: this.clone(hyps), goal: this.clone(goal), ws: ws, boards: this.clone(St.boards || {}) }]);
+      H.entries = H.entries.slice(0, H.idx + 1).concat([{ tops: this.clone(St.tops), steps: steps, hyps: this.clone(hyps), goal: this.clone(goal), ws: ws, boards: this.clone(St.boards || {}), memRows: St.memRows }]);
       if (H.entries.length > 200) H.entries = H.entries.slice(H.entries.length - 200);
       H.idx = H.entries.length - 1;
       this.checkWin();
@@ -436,13 +490,18 @@ export class Range extends Component {
     this.leanLevel(L);
     for (let i = 1; i <= H.idx; i++) H.entries[i].steps.forEach(st => L.boardChanged(st[0], st[1], st[2], st[3] || null, st[4] || null));
   }
+  asciiOf(el) { const c = el.codePointAt(0); return c >= 0x1D44E && c <= 0x1D467 ? String.fromCharCode(97 + c - 0x1D44E) : el === 'ℎ' ? 'h' : el; }
   // the theorem as the level states it (moves on the goal and the hypotheses come later, as steps)
   leanLevel(L) {
     const H = this.hist; const e0 = H && H.entries[0];
     const lv = LEVELS[this.state.level];
     const b = lv && !this.props.demo ? lv.build(this) : null;
     const start = e0 && !this.props.demo ? this.leanSum(this.boardRun(e0.tops), 'start') : (this.state.ws === 'expr' || !this.state.ws ? this.zoneTree() : null);
-    const hyps = b ? (b.hyps || []).map(h => [this.leanList(h.lhs), this.leanList(h.rhs)].concat(h.bind ? [h.bind] : [])) : this.leanHyps();
+    const hyps = b ? (b.hyps || []).filter(h => !h.kind).map(h => [this.leanList(h.lhs), this.leanList(h.rhs)].concat(h.bind ? [h.bind] : [])) : this.leanHyps();
+    if (b && b.mem) {   // a membership goal: start ∈ U, in the context the level names
+      L.setLevel(start, null, [], { ctx: b.mem.ctx, mems: b.mem.mems, scalars: (b.scalars || []).map(([el]) => this.asciiOf(el)), vectors: [] });
+      return;
+    }
     L.setLevel(start || this.zoneTree(), this.leanTree(b ? b.goal : this.state.goal), hyps);
   }
   componentDidMount() {
@@ -762,8 +821,8 @@ export class Range extends Component {
     tops.forEach(t => { this.measure(t.node); this.place(t.node, t.x, t.y, 0, { z: 4 }); });
     const zoneItems = tops.filter(t => { const p = this.P.get(t.node.id); const cy = p.y + p.h / 2; return cy > this.K.ZT && cy < this.K.ZB; });
     this.zoneIds = zoneItems.map(t => t.node.id);
-    const ZM = this.zm(); const cyOf = t => { const p = this.P.get(t.node.id); return p.y + p.h / 2; };
-    const bands = ZM < Infinity ? [['zone', zoneItems.filter(t => cyOf(t) < ZM)], ['zoneR', zoneItems.filter(t => cyOf(t) >= ZM)]] : [['zone', zoneItems]];
+    const cuts = this.rowCuts(); const cyOf = t => { const p = this.P.get(t.node.id); return p.y + p.h / 2; };
+    const bands = Array.from({ length: cuts.length + 1 }, (_, i) => [this.rowKey(i), zoneItems.filter(t => this.rowOf(cyOf(t), cuts) === i)]);
     this.zoneSets = bands.map(([k, its]) => ({ key: k, ids: its.map(t => t.node.id) }));
     this.zonePaths = {};
     bands.forEach(([k, its]) => { this.zonePaths[k] = this.plusesFor(its.map(t => this.P.get(t.node.id)), 3, k, R.pluses, its.map(t => t.node)); });
@@ -1014,13 +1073,14 @@ export class Range extends Component {
     if (d.rules && d.preview) { this.applyPreview(d); return; }
     if (d.mode === 'reorder') { this._hint = ['mul_comm']; this.setState({ override: null, dragIds: null, preview: null }); return; }
     if (d.mode === 'move') {
-      // on a hypothesis's board a term stays on its side of the =
-      if (this.isHypWs(this.state.ws) && d.blockId) {
-        const ZM = this.zm(); const side = (ts) => { const t = ts.find(u => u.node.id === d.blockId); if (!t) return null; const cy = t.y + this.measure(t.node).h / 2; return cy > this.K.ZT && cy < this.K.ZB ? (cy < ZM ? 'L' : 'R') : 'out'; };
+      // on a hypothesis's board a term stays on its side of the =; on a membership board, in its goal's row
+      const cuts = this.rowCuts();
+      if (cuts.length && d.blockId) {
+        const side = (ts) => { const t = ts.find(u => u.node.id === d.blockId); if (!t) return null; const cy = t.y + this.measure(t.node).h / 2; return cy > this.K.ZT && cy < this.K.ZB ? this.rowOf(cy, cuts) : 'out'; };
         const was = side(d.orig), now = side(this.state.tops);
-        if (was && now && was !== now) {
+        if (was != null && now != null && was !== now) {
           this.setState({ tops: this.clone(d.orig), dragIds: null, preview: null, override: null });
-          this.flash(this.P.get(d.blockId), 'a term stays on its side of the =', 'bad'); return;
+          this.flash(this.P.get(d.blockId), this.isHypWs(this.state.ws) ? 'a term stays on its side of the =' : 'a term stays in its own goal', 'bad'); return;
         }
       }
       this.setState({ dragIds: null, preview: null }); return;
@@ -1609,6 +1669,14 @@ export class Range extends Component {
   }
   // The readout of the expression as it stands: its tokens, whether its terms can be added, and its value
   readoutOf(tops) {
+    if (this.state.mem && (!this.state.ws || this.state.ws === 'expr')) {
+      // a membership board: each open goal, x ∈ 𝑈
+      const rows = (this.zoneSets || []).map(z => this.readingOrder(z.ids.map(id => (tops.find(t => t.node.id === id) || {}).node).filter(Boolean), z.key)).filter(r => r.length);
+      if (!rows.length) return { tokens: [{ t: 'no goals left', id: null }], ok: true, val: null, eq: true };
+      let toks = [];
+      rows.forEach((r, i) => { if (i) toks.push({ t: ',   ', id: null }); toks = toks.concat(this.exprTokens(r, true), [{ t: ' ∈ 𝑈', id: null }]); });
+      return { tokens: toks, ok: true, val: null, eq: true };
+    }
     if (this.isHypWs(this.state.ws)) {
       // a hypothesis: its two sides, = between; each side all one type, and the same type on both
       const side = key => { const z = (this.zoneSets || []).find(x => x.key === key); return z ? this.readingOrder(z.ids.map(id => (tops.find(t => t.node.id === id) || {}).node).filter(Boolean), key) : []; };
@@ -1740,21 +1808,86 @@ export class Range extends Component {
       const k = side.length;
       for (let w = Math.max(0, at - k + 1); w <= at && w + k <= chain.length; w++) {
         const win = chain.slice(w, w + k);
-        // a ∀ hypothesis's bound variable (pat) matches any vector term, the same one wherever it appears
-        let bound = null;
-        const ok = win.every((x, i) => {
-          if (!side[i].pat) return this.canon(x) === this.canon(side[i]);
-          if (this.typeOf(x).k !== 'v') return false;
-          if (bound) return this.canon(x) === this.canon(bound);
-          bound = x; return true;
-        });
+        // a ∀ hypothesis's bound variable (pat) matches any vector term, the same one wherever it appears (also
+        // inside a product, (−1)𝑣, or negated, −𝑣)
+        const env = {};
+        const ok = win.every((x, i) => this.matchPat(side[i], x, env));
         if (ok) {
-          const to = other.map(n => n.pat ? (bound ? this.clone(bound) : n) : n);
-          return { id: win[0].id, glow: [].concat(...win.map(x => this.ids(x))), hyp: { key: m.key, ids: win.map(x => x.id), to: to, from: win.map(x => this.clone(x)), dir: dir, name: h.name, label: h.label } };
+          const to = other.map(n => env.b ? this.instPat(n, env.b) : n);
+          return { id: win[0].id, glow: [].concat(...win.map(x => this.ids(x))), hyp: { key: m.key, ids: win.map(x => x.id), to: to, from: win.map(x => this.clone(x)), dir: dir, name: h.name, label: h.label, law: h.law || null } };
         }
       }
     }
     return null;
+  }
+  matchPat(p, x, env) {
+    const bind = y => { if (env.b) return this.canon(env.b) === this.canon(y); env.b = y; return true; };
+    if (p.pat) {
+      if (p.neg) { if (x.t !== 'v' || !x.neg) return false; const y = this.clone(x); delete y.neg; return bind(y); }
+      return this.typeOf(x).k === 'v' && bind(x);
+    }
+    if (p.t === 'prod' && x.t === 'prod' && !this.flagged(p) && !this.flagged(x)) {
+      if (p.factors.length !== x.factors.length || !p.vec !== !x.vec) return false;
+      if (!p.factors.every((f, i) => this.canon(f) === this.canon(x.factors[i]))) return false;
+      return p.vec ? this.matchPat(p.vec, x.vec, env) : true;
+    }
+    return this.canon(p) === this.canon(x);
+  }
+  instPat(n, b) {
+    if (n.pat) { const c = this.cloneFresh(b); if (n.neg) { if (c.neg) delete c.neg; else c.neg = true; } return c; }
+    if (n.t === 'prod') { const c = this.cloneFresh(n); c.vec = n.vec ? this.instPat(n.vec, b) : null; return c; }
+    return n;
+  }
+  // ---------- membership goals (1.34): a card on a goal's row ----------
+  // A fact (hu : 𝑢 ∈ 𝑈, h0) closes a row that is exactly its vector; hs (closed under ·) turns 𝑎𝑥 into 𝑥; ha (closed
+  // under +) splits a row of two or more terms into two rows (the last term gets its own); h (𝑈 is a subspace) does
+  // whichever of the three fits.
+  memTarget(h, cx, cy) {
+    if (!this.state.mem || (this.state.ws && this.state.ws !== 'expr')) return null;
+    let tile = null;
+    this.state.tops.forEach(t => this.walk(t.node, n => {
+      if (n.t !== 's' && n.t !== 'v') return; const p = this.P.get(n.id);
+      if (this.inRect(p, cx, cy, 4) && (!tile || p.depth >= tile.depth)) tile = { id: n.id, depth: p.depth };
+    }, null, null));
+    if (!tile) return null;
+    const top = this.state.tops.find(t => this.ids(t.node).indexOf(tile.id) >= 0);
+    const z = top && this.zoneSetOf(top.node.id); if (!z) return null;
+    const k = this.zoneSets.indexOf(z); const row = this.zoneNodes(z.key);
+    const one = row.length === 1 ? row[0] : null;
+    const isZero = !!one && one.t === 'v' && one.key === 'zero';
+    const isProd = !!one && one.t === 'prod' && !!one.vec && one.factors.length > 0 && !this.flagged(one);
+    let card = null, kind = null;
+    if (h.kind === 'fact' && one && this.canon(one) === this.canon(h.node)) { card = h.name; kind = 'close'; }
+    if (h.kind === 'drop' && isProd) { card = h.name; kind = 'drop'; }
+    if (h.kind === 'split' && row.length >= 2) { card = h.name; kind = 'split'; }
+    if (h.kind === 'subspace') { if (isZero) { card = 'h.zero'; kind = 'close'; } else if (isProd) { card = 'h.smul'; kind = 'drop'; } else if (row.length >= 2) { card = 'h.add'; kind = 'split'; } }
+    if (!card) return null;
+    return { id: row[0].id, glow: [].concat(...row.map(n => this.ids(n))), mem: { key: z.key, row: k, card: card, kind: kind, label: h.label } };
+  }
+  applyMem(hit) {
+    const H = hit.mem; const rows = this.state.memRows || 1;
+    let tops = this.clone(this.state.tops);
+    const zi = (this.zoneSets[H.row] || { ids: [] }).ids;
+    const inRow = t => zi.indexOf(t.node.id) >= 0;
+    const below = t => this.zoneSets.findIndex(z => z.ids.indexOf(t.node.id) >= 0) > H.row;
+    const said = this.zoneNodes(H.key).map(n => this.label(n)).join(' + ');
+    let n = rows, note;
+    if (H.kind === 'close') {
+      tops = tops.filter(t => !inRow(t)); tops.forEach(t => { if (below(t)) t.y -= 160; }); n = rows - 1;
+      note = said + ' ∈ 𝑈 · ' + H.label + (n ? '' : ' · no goals left');
+    } else if (H.kind === 'drop') {
+      const t = tops.find(inRow); t.node = this.cloneFresh(t.node.vec);
+      note = H.label + ': ' + said + ' ∈ 𝑈 if ' + this.label(t.node) + ' ∈ 𝑈';
+    } else {
+      const row = this.zoneNodes(H.key); const last = row[row.length - 1];
+      tops.forEach(t => { if (below(t)) t.y += 160; });
+      const lt = tops.find(t => t.node.id === last.id); lt.y += 160; lt.x = 24; n = rows + 1;
+      note = H.label + ': two goals, ' + row.slice(0, -1).map(x => this.label(x)).join(' + ') + ' ∈ 𝑈 and ' + this.label(last) + ' ∈ 𝑈';
+    }
+    this._memStep = { row: H.row, card: H.card };
+    const at = this.P.get(hit.id);
+    this.setState({ memRows: n, tops: this.normTops(this.tidy(tops, 'expr', n)) });
+    this.flash(at, note, 'ok');
   }
   applyHyp(hit) {
     const H = hit.hyp; const tops = this.clone(this.state.tops);
@@ -1775,7 +1908,7 @@ export class Range extends Component {
     ents.forEach(t => list.splice(list.indexOf(t), 1));
     list.splice(Math.min(i0, list.length), 0, ...added);
     if (fresh.length > 1) this._splitGroup = { key: H.key, parts: [fresh.map(n => n.id)] };
-    this._hint = [H.name];
+    this._hint = [H.law || H.name];
     this.setState({ tops: this.normTops(tops) });
     const side = ns => ns.map(n => this.label(n)).join(' + ');
     this.flash(this.P.get(H.ids[0]), H.label + ': ' + side(H.dir === 'fwd' ? H.from : H.to) + ' = ' + side(H.dir === 'fwd' ? H.to : H.from), 'ok');
@@ -1792,7 +1925,8 @@ export class Range extends Component {
     const d = this.hdrag; const w = this.worldDelta(e, d);
     if (!d.moved && Math.abs(w.dx) + Math.abs(w.dy) < 8) return;
     d.moved = true; d.x = d.fx + w.dx; d.y = d.fy + w.dy;
-    this.setState({ zeroHover: this.hypTarget(d.hyp, d.x, d.y), hdragAt: { x: d.x, y: d.y } });
+    const target = d.hyp.kind && d.hyp.kind !== 'eq' ? this.memTarget(d.hyp, d.x, d.y) : this.hypTarget(d.hyp, d.x, d.y);
+    this.setState({ zeroHover: target, hdragAt: { x: d.x, y: d.y } });
   }
   hend() {
     const d = this.hdrag; this.hdrag = null;
@@ -1800,7 +1934,8 @@ export class Range extends Component {
     this.setState({ zeroHover: null, hdragAt: null });
     if (!d.moved && d.quiet) return;
     if (!d.moved) { this.flash({ x: 40, y: this.K.ZT }, 'Drag ' + d.hyp.label + ' onto either side of it on the board: that part becomes the other side', 'info'); return; }
-    if (hit && hit.hyp) this.applyHyp(hit);
+    if (hit && hit.mem) this.applyMem(hit);
+    else if (hit && hit.hyp) this.applyHyp(hit);
   }
   // a pointer event's position in board units
   fingerAt(e) {
@@ -1999,7 +2134,8 @@ export class Range extends Component {
       const boxes = items.map(t => this.P.get(t.node.id));
       // slots and boxes in the same (world) units; the row's top stays below the readout (a hypothesis's second
       // row, below the split)
-      lineUp(items, items.map((t, i) => ({ x: t.x, y: t.y, w: boxes[i].w, h: boxes[i].h })), (this.zonePaths[gid] || []).slice(), gid === 'zoneR' ? this.zm() + 6 : this.K.ZT + 104);
+      lineUp(items, items.map((t, i) => ({ x: t.x, y: t.y, w: boxes[i].w, h: boxes[i].h })), (this.zonePaths[gid] || []).slice(),
+        this.isHypWs(this.state.ws) && gid === 'zoneR' ? this.zm() + 6 : this.K.ZT + 104 + 160 * Math.max(0, (this.zoneSets || []).indexOf(zs)));
     } else {
       const loc = this.locate(tops, gid); if (!loc) return;
       const S = loc.node;
@@ -2146,7 +2282,7 @@ export class Range extends Component {
     const TV = St.tree ? this.treeVals(St.tree.root) : null;
     const hypsY = 64 + rows * 104;
     const hyps = (St.hyps || []).map((h, i) => {
-      const text = h.label + ' : ' + (h.forall || '') + this.exprText(h.lhs, true) + ' = ' + this.exprText(h.rhs, true);
+      const text = this.hypText(h).replace(/^\(|\)$/g, '');
       return { text: text, x: 22 + i * 252, y: hypsY,
         down: e => { stop(e); const f = this.fingerAt(e); this.hdrag = { hyp: h, sx: e.clientX, sy: e.clientY, fx: f.x, fy: f.y, x: f.x, y: f.y, moved: false, text: text }; } };
     });
@@ -2217,20 +2353,23 @@ export class Range extends Component {
     const base = [['{'], ['𝑉', vT], [' : Type}   [VectorSpace '], ['ℝ', rT], [' '], ['𝑉', vT], [']']]
       .concat(...(St.scalars || []).map(([el, f]) => [['   (' + el + ' : '], [f, rT], [')']]));
     const rowsA = [];
-    if (St.vars) {
+    // a level's sets (𝑈 : Set 𝑉) and vectors get a line of their own
+    const sets = [].concat(...(St.sets || []).map(el => [['(' + el + ' : Set '], ['𝑉', vT], [')   ']]));
+    if (St.vars || St.sets) {
       rowsA.push(base);
-      rowsA.push([].concat(...St.vars.map((x, i) => (i ? [['  ']] : []).concat([decl(x)]))));
+      rowsA.push(sets.concat(...(St.vars || []).map((x, i) => (i ? [['  ']] : []).concat([decl(x)]))));
     } else rowsA.push(base.concat([['   '], decl(['𝑣', 'v'])]));
     const side = ns => this.exprText(ns, true); // the readout's notation
-    const htext = h => '(' + h.label + ' : ' + (h.forall || '') + side(h.lhs) + ' = ' + side(h.rhs) + ')';
+    const htext = h => this.hypText(h);
     const own = (St.hyps || []).filter(h => !h.wit), wits = (St.hyps || []).filter(h => h.wit);
     // a hypothesis whose board is in the box leaves its place to the expression (a small dashed box)
     const exprMini = () => this.exprText(this.exprRun(), true);
     const hypTok = h => St.ws === h.name ? [exprMini(), null, { slot: 'label', ws: h.name }] : [htext(h), null, { hyp: h }];
-    if (own.length) rowsA.push([].concat(...own.map((h, i) => (i ? [['   ']] : []).concat([hypTok(h)]))));
+    this.hypRows(own).forEach(row => rowsA.push([].concat(...row.map((h, i) => (i ? [['   ']] : []).concat([hypTok(h)])))));
     // a witness from the inverse axiom: its vector and its hypothesis, on a line of their own
     wits.forEach(h => { const w = h.lhs[h.lhs.length - 1]; rowsA.push([decl([w.el, w.key]), ['   '], hypTok(h)]); });
-    const goal = St.ws === 'goal' ? [[exprMini(), null, { slot: 'plain', ws: 'goal' }]] : this.nodeTokens(St.goal);
+    const goal = St.ws === 'goal' ? [[exprMini(), null, { slot: 'plain', ws: 'goal' }]]
+      : St.mem ? [[St.mem.text]] : this.nodeTokens(St.goal);
     const build = (key, title, y, rowsIn) => {
       const on = !!(St.tiles && St.tiles[key]);
       const mk = list => list.map(([t, tile, opt]) => {
@@ -2269,7 +2408,9 @@ export class Range extends Component {
       return { key: key, title: title, y: y, on: on, rows: rows, tokens: [].concat(...rows), toggle: toggle,
         tap: e => { if (e && e.stopPropagation) e.stopPropagation(); this.headTap(key === 'goal' ? (St.ws === 'goal' ? 'expr' : 'goal') : null, toggle); } };
     };
-    return [build('assume', 'ASSUMPTIONS', K.AY, rowsA), build('goal', St.ws === 'goal' ? 'EXPRESSION' : 'GOAL · ' + (St.level || ''), K.GY, [goal])];
+    const L = LEVELS[St.level];
+    const gTitle = L && L.parent ? 'GOAL ' + (L.idx + 1) + ' OF ' + GOALS[L.parent].length + ' · ' + L.parent + ' · ' + L.side : 'GOAL · ' + (St.level || '');
+    return [build('assume', 'ASSUMPTIONS', K.AY, rowsA), build('goal', St.ws === 'goal' ? 'EXPRESSION' : gTitle, K.GY, [goal])];
   }
   // [text, tile] pairs for a small expression tree (the goal): each scalar and vector gets its tile
   nodeTokens(n) {
@@ -2312,6 +2453,29 @@ export class Range extends Component {
     if (A.phase === 'out') return base + o + ' animation: wsAway 0.34s cubic-bezier(0.5, 0, 0.9, 0.5) both; pointer-events: none';
     if (A.phase === 'swing') return base + ' opacity: 0; pointer-events: none';
     return base + o + ' animation: wsCome 0.56s cubic-bezier(0.1, 0.6, 0.3, 1) both';
+  }
+  // a goal of a multi-goal level just won: the next one not done yet (after this one, then from the start)
+  nextGoal() {
+    const L = LEVELS[this.state.level]; if (!L || !L.parent) return null;
+    const ids = GOALS[L.parent]; const i = ids.indexOf(L.id);
+    const id = ids.slice(i + 1).concat(ids.slice(0, i)).find(g => this.prog.done.indexOf(g) < 0);
+    return id ? () => this.switchLevel(id) : null;
+  }
+  // a membership board: ∈ 𝑈 after each goal's row
+  memSigns() {
+    if (!this.state.mem || (this.state.ws && this.state.ws !== 'expr')) return [];
+    return (this.zoneSets || []).map(z => z.ids.map(id => this.P.get(id)).filter(Boolean)).filter(ps => ps.length).map(ps => {
+      const r = Math.max(...ps.map(p => p.x + p.w)); const p0 = ps.sort((a, b) => a.x - b.x)[0];
+      return { x: r + 12, y: p0.y + p0.h / 2 - 24 };
+    });
+  }
+  // a goal of a multi-goal level: the level's goals as chips under GOAL (done ones gold, this one ringed); tap one
+  goalChips() {
+    const L = LEVELS[this.state.level]; if (!L || !L.parent || this.props.legacy) return null;
+    const ids = GOALS[L.parent];
+    return { x: 28, y: this.K.GY + 27 + 58 + 2, items: ids.map((id, i) => ({ id: id, n: i + 1, side: LEVELS[id].side, text: LEVELS[id].name,
+      done: this.prog.done.indexOf(id) >= 0, cur: id === this.state.level, gap: i > 0 && LEVELS[ids[i - 1]].side !== LEVELS[id].side,
+      tap: e => { if (e && e.stopPropagation) e.stopPropagation(); if (id !== this.state.level) this.switchLevel(id); } })) };
   }
   // a hypothesis's board: the = at the start of its second row
   eqSign() {
@@ -2469,7 +2633,7 @@ export class Range extends Component {
     this._zb = zb;
     // Level complete: the expression is exactly the goal. The expression's tiles hop with a few sparks, the box and
     // the readout turn gold. (What happens next comes later.)
-    const won = !this.props.legacy && !!St.goal && !(this.drag && this.drag.moved) && !St.wsAnim && this.isWon();
+    const won = !this.props.legacy && !(this.drag && this.drag.moved) && !St.wsAnim && this.isWon();
     this._won = won;
     const sparks = [];
     if (won) {
@@ -2543,11 +2707,11 @@ export class Range extends Component {
       zoomIn: () => this.zoomAround(this.state.zoom * 1.25), zoomOut: () => this.zoomAround(this.state.zoom / 1.25),
       zoomReset: () => this.setState({ zoom: 1, panX: 0, panY: 0 }), showReset: Math.abs(St.zoom - 1) > 0.01 || St.panX !== 0 || St.panY !== 0, zoomPct: Math.round(St.zoom * 100),
       zoneL: zb.l, zoneW: zb.r - zb.l, zoneT: zb.t, zoneH: zb.b - zb.t,
-      boxTitle: this.props.legacy ? 'EXPRESSION' : this.wsTitle(St.ws), wsAnim: WA || null, eqSign: this.eqSign(),
+      boxTitle: this.props.legacy ? 'EXPRESSION' : this.wsTitle(St.ws), wsAnim: WA || null, eqSign: this.eqSign(), memSigns: this.memSigns(), goalChips: this.goalChips(),
       ghosts: ghosts, groups: R.groups, pluses: R.pluses,
       vecs: R.vecs.concat(this.props.legacy || zDrag ? [zeroTile] : [], this.draggedItem('vec')), hexes: R.hexes.concat(this.props.legacy || zsDrag ? [zeroHex] : [], poDrag ? [oneHex] : [], this.draggedItem('hex')),
       boxes: R.boxes,
-      heads: this.props.legacy ? null : this.headVals(), won: won, pickLevel: () => this.setState({ trayOpen: true, trayClosing: false, trayTab: 'tools' }), sparks: sparks, exprY: this.K.ZT + 10,
+      heads: this.props.legacy ? null : this.headVals(), won: won, pickLevel: () => this.setState({ trayOpen: true, trayClosing: false, trayTab: 'tools' }), nextGoal: this.nextGoal(), sparks: sparks, exprY: this.K.ZT + 10,
       hchip: this.hdrag && this.hdrag.moved ? { x: this.hdrag.x, y: this.hdrag.y, text: this.hdrag.text } : null,
       hist: this.props.legacy ? null : { canUndo: this.canUndo(), canRedo: this.canRedo(), undo: () => this.undo(), redo: () => this.redo(), rewind: () => this.rewind() },
       tray: this.props.legacy ? null : this.trayVals(zs, zp, zeroHex, zeroTile, po, oneHex), dots: R.dots, strips: strips,
@@ -2578,8 +2742,14 @@ export class Range extends Component {
     <div style=${`position: absolute; left: ${v.zoneL}px; top: ${v.zoneT}px; width: ${v.zoneW}px; height: ${v.zoneH}px; box-sizing: border-box; border-radius: 24px; border: 2px dashed rgba(148,163,184,0.28); pointer-events: none; transition: ${v.wsAnim && v.wsAnim.phase === 'in' ? 'left 0.5s ease-out, top 0.5s ease-out, width 0.5s ease-out, height 0.5s ease-out' : 'left 0.2s ease, top 0.2s ease, width 0.2s ease, height 0.2s ease'}; animation: ${v.won ? 'winBox 1.6s ease-out both' : 'none'}`}></div>
     <div style=${`position: absolute; left: 28px; top: ${v.exprY}px; font-family: Inter, system-ui, sans-serif; font-size: 14px; font-weight: 700; letter-spacing: 0.12em; color: ${v.won ? '#F2B33D' : '#94A3B8'}; pointer-events: none; opacity: ${v.wsAnim && v.wsAnim.phase === 'swing' ? 0 : 1}`}>${v.boxTitle}</div>
     ${(v.heads || []).map(h => this.headHtml(h, v.won))}
+    ${v.goalChips ? html`<div style=${`position: absolute; left: ${v.goalChips.x}px; top: ${v.goalChips.y}px; display: flex; align-items: center; gap: 6px; z-index: 5; pointer-events: auto`}>
+      ${v.goalChips.items.map(c => html`${c.gap ? html`<span aria-hidden="true" style="width: 10px"></span>` : null}<button onClick=${c.tap} aria-label=${'Goal ' + c.n + ' (' + c.side + '): ' + c.text + (c.done ? ', done' : '')} aria-pressed=${c.cur ? 'true' : 'false'}
+        style=${`width: 34px; height: 34px; padding: 0; border-radius: 17px; font-family: Inter, system-ui, sans-serif; font-size: 14px; font-weight: 700; cursor: pointer;
+          border: ${c.cur ? '2.5px solid #F8FAFC' : '1.5px solid ' + (c.done ? '#F2B33D' : 'rgba(203,213,225,0.35)')}; background: ${c.done ? 'rgba(242,179,61,0.22)' : 'transparent'}; color: ${c.done ? '#FDE68A' : '#CBD5E1'}`}>${c.done ? '✓' : c.n}</button>`)}
+    </div>` : null}
     ${v.won ? html`<div role="status" style=${`position: absolute; left: ${v.zoneL + 6}px; top: ${v.zoneT + v.zoneH + 16}px; display: flex; align-items: center; gap: 14px; white-space: nowrap; transform-origin: 20% 50%; animation: trayPop 0.4s cubic-bezier(0.2, 1.5, 0.4, 1) 0.9s both; pointer-events: auto; z-index: 960`}>
-      <span style="font-family: Inter, system-ui, sans-serif; font-size: 22px; font-weight: 700; color: #FDE68A">You won!</span>
+      <span style="font-family: Inter, system-ui, sans-serif; font-size: 22px; font-weight: 700; color: #FDE68A">${v.nextGoal ? 'Goal done!' : 'You won!'}</span>
+      ${v.nextGoal ? html`<button onClick=${v.nextGoal} style="height: 48px; padding: 0 20px; border-radius: 24px; border: 1.5px solid #F2B33D; background: rgba(242,179,61,0.3); color: #FDE68A; font-family: Inter, system-ui, sans-serif; font-size: 18px; font-weight: 700; cursor: pointer">Next goal</button>` : null}
       <button onClick=${v.pickLevel} style="height: 48px; padding: 0 20px; border-radius: 24px; border: 1.5px solid #F2B33D; background: rgba(242,179,61,0.16); color: #F2B33D; font-family: Inter, system-ui, sans-serif; font-size: 18px; font-weight: 700; cursor: pointer">Pick another level</button>
     </div>` : null}
     ${v.hchip ? html`<div aria-hidden="true" style=${`position: absolute; left: ${v.hchip.x}px; top: ${v.hchip.y}px; transform: translate(-50%, -130%); padding: 10px 16px; border-radius: 14px; border: 1.5px solid #7DD3FC; background: rgba(14,116,144,0.85); color: #E0F2FE; font-family: 'STIX Two Text', serif; font-size: 21px; white-space: nowrap; z-index: 990; pointer-events: none; box-shadow: 0 8px 18px rgba(0,0,0,0.4)`}>${v.hchip.text}</div>` : null}
@@ -2589,6 +2759,7 @@ export class Range extends Component {
     ${v.legacy ? html`<div style="position: absolute; left: 150px; right: 30px; top: 553px; font-size: 18px; color: #CBD5E1; text-align: right; pointer-events: none">𝑈: the plane 𝑥 − 2𝑦 + 𝑧 = 0 in ℝ³</div>` : null}
 
     <div class="ws-layer" style=${this.wsLayerStyle(v.wsAnim)}>
+    ${(v.memSigns || []).map(m => html`<div aria-hidden="true" style=${`position: absolute; left: ${m.x}px; top: ${m.y}px; height: 48px; display: flex; align-items: center; font-size: 34px; color: #7DD3FC; white-space: nowrap; pointer-events: none`}>∈ 𝑈</div>`)}
     ${v.eqSign ? html`<div aria-hidden="true" style=${`position: absolute; left: ${v.eqSign.x}px; top: ${v.eqSign.y}px; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; font-size: 40px; color: #E2E8F0; pointer-events: none`}>=</div>` : null}
     ${(v.boxes || []).map(b => html`
       <div onPointerDown=${b.down} aria-label=${b.aria} style=${`position: absolute; left: ${b.x}px; top: ${b.y}px; width: ${b.w}px; height: ${b.h}px; box-sizing: border-box; border-radius: 20px; z-index: ${b.z}; touch-action: none; cursor: grab; animation: ${b.anim};
@@ -2691,7 +2862,7 @@ export class Range extends Component {
         ` : v.tray.tab === 'tools' ? html`
           <div style=${`position: absolute; left: 0; right: 0; top: 64px; bottom: 0; overflow: hidden; border-top: 1px solid #E2E8F0`}>
             <div style=${`width: 390px; height: ${(v.tray.h - 64) * 390 / 560}px; transform: scale(${560 / 390}); transform-origin: 0 0`}>
-              <${ConceptGraph} onPlay=${v.tray.play} onStart=${id => this.switchLevel(id)} done=${this.prog.done} active=${this.state.level} levels=${Object.keys(LEVELS)} />
+              <${ConceptGraph} onPlay=${v.tray.play} onStart=${id => this.switchLevel(GOALS[id] ? (GOALS[id].find(g => this.prog.done.indexOf(g) < 0) || GOALS[id][0]) : id)} done=${this.prog.done} active=${parentOf(this.state.level)} levels=${Object.keys(LEVELS).concat(Object.keys(GOALS))} />
             </div>
           </div>
         ` : html`

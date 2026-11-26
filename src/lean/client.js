@@ -132,7 +132,7 @@ export function createLean({ fetch = globalThis.fetch ? globalThis.fetch.bind(gl
   async function flush() {
     while (sid && sent < history.length) {
       const m = history[sent++];
-      if (!m.from || !m.to || (Array.isArray(m.from) && !(m.from[0] && m.from[1] && m.to[0] && m.to[1]))) { setLive({ steps: live.steps.concat([{ ok: false, hint: m.hint, error: 'This position can’t be written in Lean yet' }]) }); continue; }
+      if (!(m.target && m.target.card) && (!m.from || !m.to || (Array.isArray(m.from) && !(m.from[0] && m.from[1] && m.to[0] && m.to[1])))) { setLive({ steps: live.steps.concat([{ ok: false, hint: m.hint, error: 'This position can’t be written in Lean yet' }]) }); continue; }
       lastTouch = now();
       const r = await call('POST', '/check', { session: 'step', sid, from: m.from, to: m.to, hint: m.hint || [], witness: m.witness || null, target: m.target || null, seq: sent - 1 });
       // didn't get through (the gate gave up waiting, the network failed): the next status check sends it again
