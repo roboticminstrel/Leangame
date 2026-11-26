@@ -1495,3 +1495,17 @@ test('1.34, ⇒ (from h : 𝑈 is a subspace): h does whatever fits, 0 ∈ 𝑈 
   assert.equal(c.renderVals().won, true);
   assert.ok(c.prog.done.includes('1.34'), 'every goal done: 1.34 is won');
 });
+
+test('TOOLS: Reset progress forgets every win and place after a second tap, back to the first level', () => {
+  const store = freshStore({ v: 2, done: levelsMod.START_DONE.concat(['1.27', '1.30', '1.32']), current: '1.32', places: {} });
+  const c = makeLive({ store }); after(c);
+  dragPiece(c, 'PZ', ...centre(c, c.state.tops[0].node.vec.id)); after(c);
+  assert.ok(store.load().places['1.32']);
+  c.resetProgress();
+  assert.ok(c.prog.done.includes('1.32'), 'one tap only arms it');
+  c.resetProgress();
+  assert.deepEqual(c.prog.done, levelsMod.START_DONE);
+  assert.equal(c.state.level, levelsMod.FIRST);
+  assert.deepEqual(store.load().places, {});
+  assert.deepEqual(readout(c), ['0𝑣']);
+});

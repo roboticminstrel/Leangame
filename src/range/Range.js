@@ -4,7 +4,7 @@ import { Component } from '../../vendor/preact.mjs';
 import { html } from '../html.js';
 import { ConceptGraph } from '../graph/ConceptGraph.js';
 import { LeanPlay } from '../lean/LeanPlay.js';
-import { LEVELS, GOALS, parentOf, progressFrom, browserStore, memoryStore } from '../levels.js';
+import { LEVELS, GOALS, parentOf, progressFrom, browserStore, memoryStore, START_DONE, FIRST } from '../levels.js';
 
 export class Range extends Component {
   constructor(props) {
@@ -312,10 +312,24 @@ export class Range extends Component {
     this.prog.current = lv;
     this.store.save(this.prog);
   }
+  // Reset progress (TOOLS): every level not won, every place forgotten, back to the first level. A first tap arms
+  // the button ("Tap again to reset"), a second within 3 s does it.
+  resetProgress() {
+    if (!this.state.resetArmed) {
+      this.setState({ resetArmed: true }); clearTimeout(this._ra);
+      this._ra = setTimeout(() => this.setState({ resetArmed: false }), 3000);
+      return;
+    }
+    clearTimeout(this._ra);
+    this.prog = { v: 2, done: START_DONE.slice(), current: FIRST, places: {} };
+    this.store.save(this.prog);
+    this.setState({ resetArmed: false, tree: null });
+    this.switchLevel(FIRST, true);
+  }
   // Start (or go back to) another level: this one's place is saved, the other's restored where it was left
-  switchLevel(id) {
+  switchLevel(id, fresh) {
     if (!LEVELS[id]) return;
-    this.savePlace();
+    if (!fresh) this.savePlace();
     this.layoutFor(id);
     const L = this.loadLevel(id);
     this.layoutFor(id, L.hyps);
@@ -2850,6 +2864,8 @@ export class Range extends Component {
             <button onClick=${v.tray.pick(tab)} aria-pressed=${v.tray.tab === tab ? 'true' : 'false'} style=${`height: 42px; padding: 0 18px; border-radius: 21px; transition: all 0.22s ease; border: 1.5px solid ${v.tray.tab === tab ? (v.tray.tools ? '#1E3A8A' : '#F2B33D') : (v.tray.tools ? '#CBD5E1' : 'rgba(203,213,225,0.3)')}; background: ${v.tray.tab === tab ? (v.tray.tools ? '#DBEAFE' : 'rgba(242,179,61,0.16)') : 'transparent'}; color: ${v.tray.tools ? (v.tray.tab === tab ? '#1E3A8A' : '#475569') : v.tray.tab === tab ? '#F2B33D' : '#CBD5E1'}; font: inherit; font-size: 17px; font-weight: 700; letter-spacing: 0.06em; cursor: pointer`}>${tab.toUpperCase()}</button>
           `)}
           <span style="flex: 1"></span>
+          ${v.tray.tools && !this.props.legacy ? html`<button onClick=${() => this.resetProgress()} aria-label="Reset progress: forget every level won"
+            style=${`height: 42px; padding: 0 14px; border-radius: 21px; border: 1.5px solid ${this.state.resetArmed ? '#DC2626' : '#CBD5E1'}; background: ${this.state.resetArmed ? '#FEE2E2' : 'transparent'}; color: ${this.state.resetArmed ? '#B91C1C' : '#475569'}; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; white-space: nowrap; transition: all 0.15s ease`}>${this.state.resetArmed ? 'Tap again to reset' : 'Reset progress'}</button>` : null}
           <button onClick=${v.tray.toggle} aria-label="Close the tray" style="width: 42px; height: 42px; border-radius: 21px; border: 1.5px solid rgba(203,213,225,0.3); background: transparent; color: #CBD5E1; font: inherit; font-size: 22px; line-height: 1; cursor: pointer">×</button>
         </div>
         ${v.tray.tab === 'tray' ? html`
