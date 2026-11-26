@@ -1452,6 +1452,20 @@ export class Range extends Component {
       : 'g(' + n.terms.map(t => this.canon(t.node)).sort().join('+') + ')';
     return (n.neg ? '-' : '') + core + (n.inv ? '^-1' : '');
   }
+  // The level's declared variables as tiles (scalars, then vectors, then the witnesses' 𝑤ₖ), the same ones as in
+  // ASSUMPTIONS; kept while the declarations don't change so the tray's tiles keep their ids
+  varItems() {
+    const St = this.state; if (this.props.legacy || this.props.demo) return [];
+    const wits = (St.hyps || []).filter(h => h.wit).map(h => h.lhs[h.lhs.length - 1]);
+    const vars = (St.vars || [['𝑣', 'v']]).concat(wits.map(w => [w.el, w.key]));
+    const sig = JSON.stringify([St.scalars || [], vars]);
+    if (this._vars && this._vars.sig === sig) return this._vars.list;
+    const ascii = el => { const c = el.codePointAt(0); return c >= 0x1D44E && c <= 0x1D467 ? String.fromCharCode(97 + c - 0x1D44E) : el === 'ℎ' ? 'h' : el; };
+    const list = (St.scalars || []).map(([el, f, key]) => this.mkS(f === 'ℂ' ? 'C' : 'R', el, key || ascii(el)))
+      .concat(vars.map(([el, key]) => this.mkV('𝑉', el, key, 'R', 140)));
+    this._vars = { sig: sig, list: list };
+    return list;
+  }
   // Tap: the tile and its inverse join the tray (once each), which opens; new ones pop in
   toTray(n) {
     const have = new Set((this.state.trayItems || []).map(it => this.canon(it.node)));
@@ -1916,8 +1930,12 @@ export class Range extends Component {
       const f = this.fingerAt(e);
       this.idrag = { id: it.id, node: it.node, sx: e.clientX, sy: e.clientY, ox: w.x, oy: w.y, x: w.x, y: w.y, fx: f.x, fy: f.y, moved: false };
     };
+    // the variables ASSUMPTIONS declares sit in the tray too: drag one out like a tree piece (onto a 0 or 1 of its
+    // type), tap it to see it as a tree (where its − or ∃ form is)
+    const varStart = n => (e, ox, oy) => { itemStart({ id: n.id, node: n })(e, ox, oy); this.idrag.tap = () => this.setState({ tree: { root: this.cloneFresh(n) }, treeLeaving: [], trayOpen: true, trayTab: 'tray' }); };
     const entries = [{ kind: 'hex', w: 96, t: zeroHex, start: pieceStart(zs) }, { kind: 'vec', w: this.K.ZW, t: zeroTile, start: pieceStart(zp) }]
       .concat(po ? [{ kind: 'hex', w: 96, t: oneHex, start: pieceStart(po) }] : [])
+      .concat(this.varItems().map(n => Object.assign(this.tileOf(n, 0, 0), { start: varStart(n), id: n.id })))
       .concat((St.trayItems || []).map(it => Object.assign(this.tileOf(it.node, 0, 0), { start: itemStart(it), id: it.id })));
     let x = 22, y = 64, rows = 1;
     entries.forEach(en => { if (x > 22 && x + en.w > 528 - 18) { x = 22; y += 104; rows++; } en.px = x; en.py = y; x += en.w + 14; });

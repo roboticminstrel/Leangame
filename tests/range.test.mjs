@@ -1250,3 +1250,25 @@ test('level 1.26: unique 0, a ∀ hypothesis whose 𝑣 matches any vector: 0′
   assert.ok(c.prog.done.includes('1.26'));
   assert.deepEqual(calls.filter(x => x[0] === 'move').map(x => x[3]), [['add_zero'], null, ['h1']]);
 });
+
+test('the variables in ASSUMPTIONS are in the tray too: drag one onto a 0, or tap it for its tree', () => {
+  const c27 = makeLive({ store: freshStore({ v: 2, done: levelsMod.START_DONE, current: '1.27', places: {} }) }); after(c27);
+  const els = n => n.map(x => x.el);
+  assert.deepEqual(els(c27.varItems()), ['𝑣', '𝑤', '𝑤′']);
+  const c31 = makeLive({ store: freshStore({ v: 2, done: levelsMod.START_DONE, current: '1.31', places: {} }) }); after(c31);
+  assert.deepEqual(c31.varItems().map(n => [n.t, n.el, n.val || n.key]), [['s', '𝑎', 'a'], ['v', '𝑣', 'v']]);
+  // 1.30 with 1.27 won: 0𝑣 + 0, then the tray's 𝑣 onto the 0 makes 𝑣 + −𝑣
+  const c = makeLive({ store: freshStore({ v: 2, done: levelsMod.START_DONE.concat(['1.27']), current: '1.30', places: {} }) }); after(c);
+  assert.equal(c.renderVals().tray.list.length, 4, '0, 0, 1 and 𝑣');
+  dragPiece(c, 'PZ', ...centre(c, c.state.tops[0].node.vec.id)); after(c);
+  const z = c.state.tops.find(t => t.node.key === 'zero').node;
+  c.setState({ trayOpen: true, trayTab: 'tray' });
+  const vt = c.renderVals().tray.list[3].t;
+  vt.down(ev(0, 0)); const [tx, ty] = centre(c, z.id);
+  c.imove(ev(tx / 2, ty / 2)); c.renderVals(); c.imove(ev(tx, ty)); c.renderVals(); c.iend(); after(c);
+  assert.deepEqual(readout(c), ['0𝑣 + 𝑣 + −𝑣']);
+  // a tap shows it as a tree
+  c.setState({ trayOpen: true, trayTab: 'tray' });
+  c.renderVals().tray.list[3].t.down(ev(0, 0)); c.iend(); c.renderVals();
+  assert.equal(c.state.tree.root.el, '𝑣');
+});
