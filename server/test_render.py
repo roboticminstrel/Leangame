@@ -80,6 +80,16 @@ class Live(unittest.TestCase):
             render.step(a, v)
         self.assertNotIn("sorry", render.step(u, u, ["sorry"]))  # unknown hints are dropped
 
+    def test_forall_hypothesis(self):
+        o, x = {"v": "o"}, {"v": "x"}
+        t = render.theorem(o, {"zero": True}, hyps=[[{"add": [x, o]}, x, "x"]])
+        self.assertIn("(o : V) (h1 : ∀ x : V, (x + o) = x) :", t)
+        self.assertNotIn("(o x : V)", t)
+        with self.assertRaises(render.BadInput):
+            render.theorem(o, {"zero": True}, hyps=[[{"add": [x, o]}, x, "o"]])  # bound name must be fresh
+        with self.assertRaises(render.BadInput):
+            render.theorem(o, {"zero": True}, hyps=[[{"add": [x, o]}, x, "x; #eval"]])
+
     def test_hypotheses(self):
         z = {"zero": True}
         t = render.theorem(v, {"v": "w2"}, hyps=[[{"add": [u, v]}, z]])

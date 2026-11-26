@@ -1226,3 +1226,27 @@ test('winning shows "You won!" with a button that opens the TOOLS tab', () => {
   v.pickLevel();
   assert.equal(c.state.trayTab, 'tools'); assert.equal(c.state.trayOpen, true);
 });
+
+test('level 1.26: unique 0, a ∀ hypothesis whose 𝑣 matches any vector: 0′ = 0′ + 0 = 0 + 0′ = 0', () => {
+  const calls = [];
+  const lean = { setLevel: (a, g, hy) => calls.push(['level', a, g, hy]), boardChanged: (f, t, hn) => calls.push(['move', f, t, hn]), subscribe: () => () => {} };
+  const c = makeLive({ store: freshStore({ v: 2, done: levelsMod.START_DONE, current: '1.26', places: {} }), lean });
+  after(c); c.initLean();
+  assert.deepEqual(readout(c), ['0′']);
+  const v = c.renderVals();
+  assert.equal(v.heads[0].rows[2].map(k => k.t).join(''), '(h : ∀𝑣 : 𝑉, 𝑣 + 0′ = 𝑣)');
+  assert.deepEqual(calls[0][3], [[{ add: [{ v: 'v' }, { v: 'o' }] }, { v: 'v' }, 'v']], 'Lean gets the bound name');
+  dragPiece(c, 'PZ', ...centre(c, c.state.tops[0].node.id)); after(c);
+  assert.deepEqual(readout(c), ['0′ + 0']);
+  // h doesn't fit 0′ + 0 (no 0′ after the first term) except as its right-hand side, 𝑣 → 𝑣 + 0′, on a single term
+  const o = c.state.tops.find(t => t.node.key === 'o').node, z = c.state.tops.find(t => t.node.key === 'zero').node;
+  c.renderVals(); const pz = c.P.get(z.id);
+  dragTo(c, o.id, pz.x + pz.w + 26 + 60, pz.y + 44); after(c);              // 0′ after 0
+  assert.deepEqual(readout(c), ['0 + 0′']);
+  const hov = dragHyp(c, 'h', ...centre(c, z.id)); after(c);
+  assert.ok(hov && hov.hyp && hov.hyp.dir === 'fwd', 'on 0 + 0′ it reads left to right, 𝑣 = 0');
+  assert.deepEqual(readout(c), ['0']);
+  assert.equal(c.renderVals().won, true);
+  assert.ok(c.prog.done.includes('1.26'));
+  assert.deepEqual(calls.filter(x => x[0] === 'move').map(x => x[3]), [['add_zero'], null, ['h1']]);
+});

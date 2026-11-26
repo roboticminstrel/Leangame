@@ -173,17 +173,25 @@ def _check(lhs, rhs, more=()):
     a, b = w.sort(lhs), w.sort(rhs)
     if a != b:
         raise BadInput("one side is a scalar and the other a vector")
-    for l, r in more:
+    used = set(w.vectors)  # the start and goal's own vectors: a ∀-bound name can't be one of them
+    bound = set()
+    for h in more:
+        l, r = h[0], h[1]
         if w.sort(l) != w.sort(r):
             raise BadInput("a hypothesis has a scalar on one side and a vector on the other")
+        if len(h) > 2:
+            if not isinstance(h[2], str) or not NAME.match(h[2]) or h[2] in used:
+                raise BadInput("a hypothesis binds one fresh vector name")
+            bound.add(h[2])
     clash = w.scalars & w.vectors
     if clash:
         raise BadInput(f"{sorted(clash)[0]} is used as both a scalar and a vector")
+    vectors = w.vectors - bound
     binders = ""
     if w.scalars:
         binders += f" ({' '.join(sorted(w.scalars))} : F)"
-    if w.vectors:
-        binders += f" ({' '.join(sorted(w.vectors))} : V)"
+    if vectors:
+        binders += f" ({' '.join(sorted(vectors))} : V)"
     return binders
 
 
@@ -196,14 +204,14 @@ def statement(lhs, rhs):
 
 def theorem(start, goal, name="level1", hyps=None):
     """`theorem level1 … (h1 : l = r) … : start = goal := by` (the steps follow, one per line). hyps: a level's
-    hypotheses, as [lhs, rhs] pairs; in the proof they're h1, h2, …"""
+    hypotheses, as [lhs, rhs] pairs, or [lhs, rhs, x] for `∀ x : V, lhs = rhs`; in the proof they're h1, h2, …"""
     if not re.match(r"^[a-z][a-z0-9_]{0,30}$", name):
         raise BadInput("bad theorem name")
     hyps = hyps or []
-    if not isinstance(hyps, list) or len(hyps) > 9 or any(not isinstance(h, list) or len(h) != 2 for h in hyps):
-        raise BadInput("hypotheses are up to nine [lhs, rhs] pairs")
+    if not isinstance(hyps, list) or len(hyps) > 9 or any(not isinstance(h, list) or len(h) not in (2, 3) for h in hyps):
+        raise BadInput("hypotheses are up to nine [lhs, rhs] pairs (or [lhs, rhs, bound name])")
     binders = _check(start, goal, hyps)
-    hs = "".join(f" (h{i + 1} : {term(l)} = {term(r)})" for i, (l, r) in enumerate(hyps))
+    hs = "".join(f" (h{i + 1} : {'∀ ' + h[2] + ' : V, ' if len(h) > 2 else ''}{term(h[0])} = {term(h[1])})" for i, h in enumerate(hyps))
     return f"theorem {name} {BINDERS}{binders}{hs} :\n    {term(start)} = {term(goal)} := by"
 
 

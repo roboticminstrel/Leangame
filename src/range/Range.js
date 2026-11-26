@@ -138,7 +138,7 @@ export class Range extends Component {
     return ns.slice().sort((a, b) => Math.abs(pos(a).y - pos(b).y) > 60 ? pos(a).y - pos(b).y : pos(a).x - pos(b).x);
   }
   leanList(ns) { const ts = ns.map(n => this.leanTree(n)); return ts.length === 1 ? ts[0] : { add: ts }; }
-  leanHyps() { return (this.state.hyps || []).filter(h => !h.wit).map(h => [this.leanList(h.lhs), this.leanList(h.rhs)]); }
+  leanHyps() { return (this.state.hyps || []).filter(h => !h.wit).map(h => [this.leanList(h.lhs), this.leanList(h.rhs)].concat(h.bind ? [h.bind] : [])); }
   zoneTree() { return this.leanSum(this.state.tops.filter(t => this.zoneIds.indexOf(t.node.id) >= 0).map(t => t.node), 'zone'); }
   // ---------- levels: a level's place is its move history (each entry the board after a move, with the Lean steps
   // that move sent) and where in it the player is ----------
@@ -1526,8 +1526,17 @@ export class Range extends Component {
       const k = side.length;
       for (let w = Math.max(0, at - k + 1); w <= at && w + k <= chain.length; w++) {
         const win = chain.slice(w, w + k);
-        if (win.every((x, i) => this.canon(x) === this.canon(side[i]))) {
-          return { id: win[0].id, glow: [].concat(...win.map(x => this.ids(x))), hyp: { key: m.key, ids: win.map(x => x.id), to: other, dir: dir, name: h.name, label: h.label } };
+        // a ∀ hypothesis's bound variable (pat) matches any vector term, the same one wherever it appears
+        let bound = null;
+        const ok = win.every((x, i) => {
+          if (!side[i].pat) return this.canon(x) === this.canon(side[i]);
+          if (this.typeOf(x).k !== 'v') return false;
+          if (bound) return this.canon(x) === this.canon(bound);
+          bound = x; return true;
+        });
+        if (ok) {
+          const to = other.map(n => n.pat ? (bound ? this.clone(bound) : n) : n);
+          return { id: win[0].id, glow: [].concat(...win.map(x => this.ids(x))), hyp: { key: m.key, ids: win.map(x => x.id), to: to, from: win.map(x => this.clone(x)), dir: dir, name: h.name, label: h.label } };
         }
       }
     }
@@ -1554,7 +1563,7 @@ export class Range extends Component {
     this._hint = [H.name];
     this.setState({ tops: this.normTops(tops) });
     const side = ns => ns.map(n => this.label(n)).join(' + ');
-    this.flash(this.P.get(H.ids[0]), H.label + ': ' + side(H.dir === 'fwd' ? this.state.hyps.find(h => h.name === H.name).lhs : H.to) + ' = ' + side(H.dir === 'fwd' ? H.to : this.state.hyps.find(h => h.name === H.name).lhs), 'ok');
+    this.flash(this.P.get(H.ids[0]), H.label + ': ' + side(H.dir === 'fwd' ? H.from : H.to) + ' = ' + side(H.dir === 'fwd' ? H.to : H.from), 'ok');
   }
   // a hypothesis dragged straight from ASSUMPTIONS (a tap still switches the tiles there)
   hypDown(h, text) {
@@ -1916,7 +1925,7 @@ export class Range extends Component {
     const TV = St.tree ? this.treeVals(St.tree.root) : null;
     const hypsY = 64 + rows * 104;
     const hyps = (St.hyps || []).map((h, i) => {
-      const text = h.label + ' : ' + this.exprText(h.lhs, true) + ' = ' + this.exprText(h.rhs, true);
+      const text = h.label + ' : ' + (h.forall || '') + this.exprText(h.lhs, true) + ' = ' + this.exprText(h.rhs, true);
       return { text: text, x: 22 + i * 252, y: hypsY,
         down: e => { stop(e); const f = this.fingerAt(e); this.hdrag = { hyp: h, sx: e.clientX, sy: e.clientY, fx: f.x, fy: f.y, x: f.x, y: f.y, moved: false, text: text }; } };
     });
@@ -1992,7 +2001,7 @@ export class Range extends Component {
       rowsA.push([].concat(...St.vars.map((x, i) => (i ? [['  ']] : []).concat([decl(x)]))));
     } else rowsA.push(base.concat([['   '], decl(['𝑣', 'v'])]));
     const side = ns => this.exprText(ns, true); // the readout's notation
-    const htext = h => '(' + h.label + ' : ' + side(h.lhs) + ' = ' + side(h.rhs) + ')';
+    const htext = h => '(' + h.label + ' : ' + (h.forall || '') + side(h.lhs) + ' = ' + side(h.rhs) + ')';
     const own = (St.hyps || []).filter(h => !h.wit), wits = (St.hyps || []).filter(h => h.wit);
     if (own.length) rowsA.push([].concat(...own.map((h, i) => (i ? [['   ']] : []).concat([[htext(h), null, { hyp: h }]]))));
     // a witness from the inverse axiom: its vector and its hypothesis, on a line of their own

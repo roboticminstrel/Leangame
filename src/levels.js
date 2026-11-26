@@ -9,6 +9,19 @@
 // label (shown), lhs, rhs } with each side a list of terms, a run in a sum), vars (the vectors it declares, for
 // ASSUMPTIONS) and scalars (symbolic scalars it declares, [shown, field]).
 export const LEVELS = {
+  '1.26': {
+    id: '1.26', name: 'unique 0',
+    // 0′ is another additive identity: h says 𝑣 + 0′ = 𝑣 for every 𝑣 (a ∀ hypothesis: its 𝑣 matches any vector)
+    build: R => {
+      const O = () => R.mkV('𝑉', '0′', 'o', 'R', 120), Z = () => R.mkV('𝑉', '0', 'zero', 'R', 110);
+      const P = () => Object.assign(R.mkV('𝑉', '𝑣', 'v', 'R', 140), { pat: true });
+      return {
+        start: [O()], goal: Z(),
+        vars: [['0′', 'o']],
+        hyps: [{ name: 'h1', label: 'h', bind: 'v', forall: '∀𝑣 : 𝑉, ', lhs: [P(), O()], rhs: [P()] }],
+      };
+    },
+  },
   '1.27': {
     id: '1.27', name: 'unique −𝑣',
     build: R => {

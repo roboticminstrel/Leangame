@@ -422,6 +422,19 @@ def selftest():
     checks.append(("live: level 1.27 (unique inverse, with hypotheses h1 h2) played through, whole proof compiles", ru.get("ok") and ru.get("done") and ru.get("verified")))
     if not ru.get("done"):
         print("     level 1.27 stopped at", json.dumps(cur), "->", json.dumps(ru)[:600], json.dumps(stu)[:300], flush=True)
+    # level 1.26: (h1 : ∀ x : V, x + o = x) : o = 0, the book's way: o → o + 0 → 0 + o → 0
+    O, X = {"v": "o"}, {"v": "x"}
+    seq26 = [({"add": [O, {"zero": True}]}, ["add_zero"]), ({"add": [{"zero": True}, O]}, None), ({"zero": True}, ["h1"])]
+    code, st26 = ss.start({"start": O, "goal": {"zero": True}, "hyps": [[{"add": [X, O]}, X, "x"]]})
+    cur, r26 = O, {}
+    for nxt, hint in seq26:
+        r26 = ss.step({"sid": st26.get("sid"), "from": cur, "to": nxt, "hint": hint})[1]
+        if not r26.get("ok"):
+            break
+        cur = nxt
+    checks.append(("live: level 1.26 (unique 0, a ∀ hypothesis) played through, whole proof compiles", r26.get("ok") and r26.get("done") and r26.get("verified")))
+    if not r26.get("done"):
+        print("     level 1.26 stopped at", json.dumps(cur), "->", json.dumps(r26)[:600], json.dumps(st26)[:300], flush=True)
     # level 1.30 without negatives: 0v → 0v + 0 → (obtain y1, h1 : 0v + y1 = 0) 0v + (0v + y1) → 0v + 0v + y1
     # → (0 + 0)v + y1 → 0v + y1 → 0
     Y = {"v": "y1"}
