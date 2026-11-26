@@ -313,6 +313,75 @@ def hyp_step(name, frm, to, bind=None, hint=None, nhyps=0):
     return f"replace {name} : {term(l2)} = {term(r2)} := {proof}"
 
 
+# ---------- membership goals (1.34): `x ∈ U` for a set U of vectors ----------
+# The contexts a level can give U (fixed text: the browser only names one). "closed": the three conditions of 1.34;
+# "subspace": U is a subspace in the book's sense (1.33, Leangame.Subspace).
+MEM_CONTEXTS = {
+    "closed": "(h0 : (0 : V) ∈ U) (ha : ∀ x y : V, x ∈ U → y ∈ U → x + y ∈ U) "
+              "(hs : ∀ (a : F) (x : V), x ∈ U → a • x ∈ U)",
+    "subspace": "(h : Axler.IsSubspace F U)",
+}
+# A card on a goal row: what it does there ("close" the row, "drop" a scalar factor, "split" a sum into two rows)
+# and the tactic. Facts about one vector (hu : u ∈ U) close a row too; see mem_step.
+MEM_CARDS = {
+    ("closed", "h0"): ("close", "exact h0"),
+    ("closed", "ha"): ("split", "refine ha _ _ ?_ ?_"),
+    ("closed", "hs"): ("drop", "refine hs _ _ ?_"),
+    ("subspace", "h.zero"): ("close", "exact h.zero_mem"),
+    ("subspace", "h.add"): ("split", "refine h.add_mem _ _ ?_ ?_"),
+    ("subspace", "h.smul"): ("drop", "refine h.smul_mem _ _ ?_"),
+}
+MEM_HYP = re.compile(r"^h([a-z][0-9]?)$")
+
+
+def mem_theorem(start, ctx, mems, name="level1", scalars=(), vectors=()):
+    """`theorem level1 … (U : Set V) <context> (vars) (hu : u ∈ U) … : start ∈ U := by`. mems: the vectors known to be in
+    U (each gets h<name>); scalars, vectors: more variables the level declares."""
+    if ctx not in MEM_CONTEXTS:
+        raise BadInput("unknown context")
+    if not re.match(r"^[a-z][a-z0-9_]{0,30}$", name):
+        raise BadInput("bad theorem name")
+    w = _Walk()
+    if w.sort(start) != "V":
+        raise BadInput("only vectors can be in U")
+    for x in list(mems) + list(vectors):
+        if not isinstance(x, str) or not NAME.match(x) or x == "x" or x == "y":
+            raise BadInput("variable names are one lowercase letter, optionally followed by a digit (not x or y)")
+        w.vectors.add(x)
+    for x in scalars:
+        if not isinstance(x, str) or not NAME.match(x) or x == "a":
+            raise BadInput("scalar names are one lowercase letter (not a)")
+        w.scalars.add(x)
+    if "U" in w.vectors or w.scalars & w.vectors:
+        raise BadInput("names clash")
+    binders = ""
+    if w.scalars:
+        binders += f" ({' '.join(sorted(w.scalars))} : F)"
+    if w.vectors:
+        binders += f" ({' '.join(sorted(w.vectors))} : V)"
+    hs = "".join(f" (h{x} : {x} ∈ U)" for x in mems)
+    return f"theorem {name} {BINDERS} (U : Set V) {MEM_CONTEXTS[ctx]}{binders}{hs} :\n    {term(start)} ∈ U := by"
+
+
+def mem_step(row, ctx, card=None, frm=None, to=None, hint=None):
+    """A move on goal row `row` (Lean's goals in the board's order): a card, or rewriting the row's vector (any law
+    the board allows, as for equations)."""
+    if not isinstance(row, int) or isinstance(row, bool) or not 0 <= row < 20:
+        raise BadInput("row is a small number")
+    if card is not None:
+        m = MEM_HYP.match(card) if isinstance(card, str) else None
+        if (ctx, card) in MEM_CARDS:
+            tac = MEM_CARDS[(ctx, card)][1]
+        elif m and card not in ("ha", "hs"):
+            tac = f"exact {card}"
+        else:
+            raise BadInput("unknown card")
+    else:
+        _check(frm, to)
+        tac = f"refine (congrArg (· ∈ U) (show {term(frm)} = {term(to)} by first | {_alts(hint, 0)})).mpr ?_"
+    return f"(rotate_left {row}; {tac}; rotate_right {row})" if row else tac
+
+
 def move(lhs, rhs, rule):
     """The Lean command that checks one move: `lhs` becomes `rhs` by `rule`."""
     return f"{statement(lhs, rhs)} := by\n  {tactic(rule)}"

@@ -192,7 +192,14 @@ class Sessions:
 
     def start(self, body):
         hyps = body.get("hyps") or []
-        head = render.theorem(body.get("start"), body.get("goal"), hyps=hyps)
+        mem = body.get("mem")
+        if mem:
+            if not isinstance(mem, dict):
+                return 400, {"ok": False, "error": "mem is an object"}
+            head = render.mem_theorem(body.get("start"), mem.get("ctx"), mem.get("mems") or [], scalars=mem.get("scalars") or [], vectors=mem.get("vectors") or [])
+            hyps = []
+        else:
+            head = render.theorem(body.get("start"), body.get("goal"), hyps=hyps)
         r = self.repl.raw({"cmd": head + "\n  sorry"})
         errs = self.errors_of(r)
         sorries = r.get("sorries", [])
@@ -203,7 +210,7 @@ class Sessions:
             sid = f"s{self.n}"
             if len(self.live) > 50:
                 self.live.pop(next(iter(self.live)))
-            self.live[sid] = {"ps": sorries[0]["proofState"], "head": head, "tactics": [], "restarts": self.repl.restarts, "nhyps": len(hyps), "obtained": []}
+            self.live[sid] = {"ps": sorries[0]["proofState"], "head": head, "tactics": [], "restarts": self.repl.restarts, "nhyps": len(hyps), "obtained": [], "mem": mem.get("ctx") if mem else None}
         return 200, {"ok": True, "sid": sid, "theorem": head, "goals": self.goals_of(r)}
 
     def step(self, body):
@@ -212,8 +219,8 @@ class Sessions:
             return 409, {"ok": False, "error": "session ended: start again"}
         # the same step again (its answer was lost, e.g. the gate gave up waiting): answer it from memory rather than
         # run it twice
-        key = json.dumps([body.get("from"), body.get("to"), body.get("target"), body.get("witness")], sort_keys=True)
-        if s.get("last") == key:
+        key = body.get("seq")  # the step's place in the board's history: the same place again is a resend
+        if key is not None and s.get("last") == key:
             return 200, s["lastOut"]
         wit = body.get("witness")
         if wit and wit.get("name") not in s["obtained"]:
@@ -229,7 +236,11 @@ class Sessions:
         target = body.get("target") or {}
         if not isinstance(target, dict):
             return 400, {"ok": False, "error": "target is an object"}
-        if target.get("goal"):
+        if s.get("mem"):
+            if "row" not in target:
+                return 400, {"ok": False, "error": "a move on a membership goal names its row"}
+            tac = render.mem_step(target.get("row"), s["mem"], target.get("card"), body.get("from"), body.get("to"), body.get("hint"))
+        elif target.get("goal"):
             tac = render.goal_step(body.get("from"), body.get("to"), body.get("hint"), s.get("nhyps", 0))
         elif target.get("hyp"):
             h = target.get("hyp")
@@ -475,6 +486,32 @@ def selftest():
     checks.append(("live: factoring a bare v (−1v + v + −v → −1v + 1v + −v → (−1 + 1)v + −v)", rb1.get("ok") and rb2.get("ok")))
     if not (rb1.get("ok") and rb2.get("ok")):
         print("     bare v:", json.dumps(rb1)[:600], json.dumps(rb2)[:600], flush=True)
+    # level 1.34, the goal with content: -u ∈ U from the three conditions: -u → (-1)u (1.32), hs, hu
+    uu = {"v": "u"}
+    code, sm = ss.start({"start": {"neg": uu}, "mem": {"ctx": "closed", "mems": ["u"]}})
+    m1 = ss.step({"sid": sm.get("sid"), "from": {"neg": uu}, "to": {"smul": [n(-1), uu]}, "hint": ["neg_one_smul"], "target": {"row": 0}})[1]
+    m2 = ss.step({"sid": sm.get("sid"), "target": {"row": 0, "card": "hs"}})[1]
+    m3 = ss.step({"sid": sm.get("sid"), "target": {"row": 0, "card": "hu"}})[1]
+    checks.append(("live: 1.34's -u ∈ U (1.32, then closure under scalars, then hu), whole proof compiles", m1.get("ok") and m2.get("ok") and m3.get("ok") and m3.get("done") and m3.get("verified")))
+    if not m3.get("done"):
+        print("     1.34 -u:", json.dumps(sm)[:400], json.dumps(m1)[:400], json.dumps(m2)[:300], json.dumps(m3)[:300], flush=True)
+    # u + w ∈ U by ha: two goals; the second row first (hw), then the first (hu)
+    ww = {"v": "w"}
+    code, sa = ss.start({"start": {"add": [uu, ww]}, "mem": {"ctx": "closed", "mems": ["u", "w"]}})
+    a1 = ss.step({"sid": sa.get("sid"), "target": {"row": 0, "card": "ha"}})[1]
+    a2 = ss.step({"sid": sa.get("sid"), "target": {"row": 1, "card": "hw"}})[1]
+    a3 = ss.step({"sid": sa.get("sid"), "target": {"row": 0, "card": "hu"}})[1]
+    checks.append(("live: two goals at once (ha splits u + w; close the second, then the first)", a1.get("ok") and a2.get("ok") and a3.get("done") and a3.get("verified")))
+    if not a3.get("done"):
+        print("     1.34 split:", json.dumps(sa)[:300], json.dumps(a1)[:300], json.dumps(a2)[:300], json.dumps(a3)[:300], flush=True)
+    # and from the book's definition (h : IsSubspace F U): a·u ∈ U
+    aa = {"s": "b"}
+    code, sh = ss.start({"start": {"smul": [aa, uu]}, "mem": {"ctx": "subspace", "mems": ["u"]}})
+    b1 = ss.step({"sid": sh.get("sid"), "target": {"row": 0, "card": "h.smul"}})[1]
+    b2 = ss.step({"sid": sh.get("sid"), "target": {"row": 0, "card": "hu"}})[1]
+    checks.append(("live: from the book's definition (h : IsSubspace F U), b·u ∈ U", b1.get("ok") and b2.get("done") and b2.get("verified")))
+    if not b2.get("done"):
+        print("     1.34 h:", json.dumps(sh)[:400], json.dumps(b1)[:300], json.dumps(b2)[:300], flush=True)
     # level 1.26: (h1 : ∀ x : V, x + o = x) : o = 0, the book's way: o → o + 0 → 0 + o → 0
     O, X = {"v": "o"}, {"v": "x"}
     seq26 = [({"add": [O, {"zero": True}]}, ["add_zero"]), ({"add": [{"zero": True}, O]}, None), ({"zero": True}, ["h1"])]

@@ -121,7 +121,7 @@ export function createLean({ fetch = globalThis.fetch ? globalThis.fetch.bind(gl
     setLive({ state: 'starting', theorem: '', steps: [], goals: [], error: null, done: false, verified: null });
     queue = queue.then(async () => {
       lastTouch = now();
-      const r = await call('POST', '/check', { session: 'start', start: level.start, goal: level.goal, hyps: level.hyps || [] });
+      const r = await call('POST', '/check', Object.assign({ session: 'start', start: level.start, goal: level.goal, hyps: level.hyps || [] }, level.mem ? { mem: level.mem } : {}));
       if (!r.ok || !r.sid) { setLive({ state: 'error', error: r.error || r.detail || 'Lean couldn’t start the proof' }); return; }
       sid = r.sid;
       setLive({ state: 'live', theorem: r.theorem, goals: r.goals || [] });
@@ -134,7 +134,7 @@ export function createLean({ fetch = globalThis.fetch ? globalThis.fetch.bind(gl
       const m = history[sent++];
       if (!m.from || !m.to || (Array.isArray(m.from) && !(m.from[0] && m.from[1] && m.to[0] && m.to[1]))) { setLive({ steps: live.steps.concat([{ ok: false, hint: m.hint, error: 'This position can’t be written in Lean yet' }]) }); continue; }
       lastTouch = now();
-      const r = await call('POST', '/check', { session: 'step', sid, from: m.from, to: m.to, hint: m.hint || [], witness: m.witness || null, target: m.target || null });
+      const r = await call('POST', '/check', { session: 'step', sid, from: m.from, to: m.to, hint: m.hint || [], witness: m.witness || null, target: m.target || null, seq: sent - 1 });
       // didn't get through (the gate gave up waiting, the network failed): the next status check sends it again
       if (r.state === 'asleep' || r.state === 'booting' || r.transient) { sent--; stalled = true; schedule(RETRY_MS, poll); return; }
       if (r.error && /session ended/.test(r.error)) { beginLive(); return; }
@@ -144,8 +144,9 @@ export function createLean({ fetch = globalThis.fetch ? globalThis.fetch.bind(gl
     }
   }
 
-  function setLevel(start, goal, hyps) {
-    level = { start, goal, hyps: hyps || [] }; history = [];
+  // mem: for a membership goal (start ∈ U), { ctx, mems, scalars, vectors } (server/render.py, mem_theorem)
+  function setLevel(start, goal, hyps, mem) {
+    level = { start, goal, hyps: hyps || [], mem: mem || null }; history = [];
     if (status.state === 'ready') beginLive();
   }
 

@@ -106,6 +106,23 @@ class Live(unittest.TestCase):
             with self.assertRaises(render.BadInput):
                 render.hyp_step(bad[0], [o, z], [o, z], bind=bad[1])
 
+    def test_membership(self):
+        u = {"v": "u"}
+        t = render.mem_theorem({"neg": u}, "closed", ["u"])
+        self.assertIn("(U : Set V) (h0 : (0 : V) ∈ U)", t)
+        self.assertTrue(t.endswith("(u : V) (hu : u ∈ U) :\n    (-u) ∈ U := by"))
+        self.assertEqual(render.mem_step(0, "closed", "hs"), "refine hs _ _ ?_")
+        self.assertEqual(render.mem_step(1, "closed", "hu"), "(rotate_left 1; exact hu; rotate_right 1)")
+        r = render.mem_step(0, "closed", None, {"neg": u}, {"smul": [{"n": -1}, u]}, ["neg_one_smul"])
+        self.assertTrue(r.startswith("refine (congrArg (· ∈ U) (show (-u) = ((-1 : F) • u) by first | "))
+        self.assertIn("Axler.VectorSpace.neg_one_smul", r)
+        self.assertEqual(render.mem_step(0, "subspace", "h.add"), "refine h.add_mem _ _ ?_ ?_")
+        for bad in [(0, "closed", "h.add"), (0, "nope", "h0"), (-1, "closed", "h0"), (0, "closed", "hs; #eval")]:
+            with self.assertRaises(render.BadInput):
+                render.mem_step(*bad)
+        with self.assertRaises(render.BadInput):
+            render.mem_theorem(u, "closed; #eval", [])
+
     def test_hypotheses(self):
         z = {"zero": True}
         t = render.theorem(v, {"v": "w2"}, hyps=[[{"add": [u, v]}, z]])
