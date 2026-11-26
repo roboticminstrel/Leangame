@@ -443,8 +443,12 @@ def selftest():
     for nxt, hint in pre:
         rf = ss.step({"sid": sidf, "from": cur, "to": nxt, "hint": hint})[1]
         cur = nxt
-    rf = ss.step({"sid": sidf, "from": cur, "to": {"add": [{"smul": [{"add": [n(0), n(0)]}, w]}, {"neg": zv0}]}, "hint": ["add_smul"]})[1]
-    checks.append(("live: factoring terms that aren't neighbours (0v + −(0v) + 0v → (0 + 0)v + −(0v))", rf.get("ok")))
+    # the board sends it as two steps: bring the pair together (bracketed), then the law
+    mid = {"add": [{"add": [zv0, zv0]}, {"neg": zv0}]}
+    rf0 = ss.step({"sid": sidf, "from": cur, "to": mid, "hint": None})[1]
+    rf = ss.step({"sid": sidf, "from": mid, "to": {"add": [{"smul": [{"add": [n(0), n(0)]}, w]}, {"neg": zv0}]}, "hint": ["add_smul"]})[1]
+    rf = rf if rf0.get("ok") else rf0
+    checks.append(("live: factoring terms that aren't neighbours (0v + −(0v) + 0v → (0v + 0v) + −(0v) → (0 + 0)v + −(0v))", rf.get("ok")))
     if not rf.get("ok"):
         print("     non-adjacent factor:", json.dumps(rf)[:1500], flush=True)
     # level 1.26: (h1 : ∀ x : V, x + o = x) : o = 0, the book's way: o → o + 0 → 0 + o → 0
