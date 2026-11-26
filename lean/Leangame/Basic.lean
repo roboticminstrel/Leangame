@@ -56,6 +56,11 @@ terms in a different order or grouping: the board's rearranging moves. -/
 instance assoc : Std.Associative (α := V) (· + ·) := ⟨AddLaws.add_assoc⟩
 instance comm : Std.Commutative (α := V) (· + ·) := ⟨AddLaws.add_comm⟩
 
+/-- `u + (v + w) = v + (u + w)`. With `add_assoc` and `add_comm` it lets `simp only` put any sum in one fixed order:
+a second way to check a rearranging move, for sums `ac_rfl` doesn't settle (it failed on `a + -a + a = a + a + -a`). -/
+protected theorem add_left_comm (u v w : V) : u + (v + w) = v + (u + w) := by
+  rw [← AddLaws.add_assoc, AddLaws.add_comm u v, AddLaws.add_assoc]
+
 /-- The cancellation step that 1.30 and 1.31 share: a vector equal to its own double is `0`.
 `x = x + 0 = x + (x + -x) = (x + x) + -x = x + -x = 0`. -/
 protected theorem eq_zero_of_add_self {x : V} (h : x + x = x) : x = 0 :=

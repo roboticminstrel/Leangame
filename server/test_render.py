@@ -72,7 +72,7 @@ class Live(unittest.TestCase):
 
     def test_step(self):
         tac = render.step({"add": [u, {"zero": True}]}, u, ["add_zero"])
-        self.assertTrue(tac.startswith("refine Eq.trans (show (u + (0 : V)) = u by first | ac_rfl | (rw [Axler.AddLaws.add_zero]; done)"))
+        self.assertTrue(tac.startswith("refine Eq.trans (show (u + (0 : V)) = u by first | ac_rfl | " + render.REARRANGE + " | (rw [Axler.AddLaws.add_zero]; done)"))
         self.assertTrue(tac.endswith(") ?_ <;> try with_reducible rfl"))
         self.assertIn("(nth_rw 2 [← Axler.VectorSpace.add_smul]; ac_rfl)", tac)  # every rule, after the hint
         self.assertNotIn("#", tac)

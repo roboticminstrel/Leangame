@@ -53,6 +53,10 @@ RULES = {
     "neg_smul": ["Axler.VectorSpace.neg_smul"],
     "smul_neg": ["Axler.VectorSpace.smul_neg"],
 }
+# Rearranging, the second way: simp puts both sides in one order with assoc, comm and left-comm (for vectors, then
+# scalars). Used when ac_rfl doesn't settle it.
+REARRANGE = ("(simp only [Axler.AddLaws.add_assoc, Axler.AddLaws.add_comm, Axler.AddLaws.add_left_comm, "
+             "add_assoc, add_comm, add_left_comm]; done)")
 # Arithmetic on numerals (2 · 3 = 6, 2 + 2 = 4), not a law: norm_num.
 ARITH = "arith"
 
@@ -218,7 +222,7 @@ def theorem(start, goal, name="level1", hyps=None):
 def alternatives(rules, lemmas=None):
     """Tactics that might prove one board move, in order: rearranging alone (ac_rfl), then each rule's lemmas both
     ways, at their first few matches, finishing with ac_rfl when the rewrite leaves the terms in another order."""
-    tries = ["ac_rfl"]
+    tries = ["ac_rfl", REARRANGE]
     for rule in rules:
         if rule == ARITH:
             tries.append("norm_num")
