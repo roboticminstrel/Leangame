@@ -1272,3 +1272,120 @@ test('the variables in ASSUMPTIONS are in the tray too: drag one onto a 0, or ta
   c.renderVals().tray.list[3].t.down(ev(0, 0)); c.iend(); c.renderVals();
   assert.equal(c.state.tree.root.el, '𝑣');
 });
+
+test('workspaces: a double tap on a hypothesis brings its equation into the box; moves there change it; back out, the expression is as it was', () => {
+  const calls = [];
+  const lean = { setLevel: (a, g, hy) => calls.push(['level', a, g, hy]), boardChanged: (f, t, h, w, tg) => calls.push(['move', f, t, h, tg]), subscribe: () => () => {} };
+  const c = makeLive({ store: freshStore({ v: 2, done: levelsMod.START_DONE, current: '1.27', places: {} }), lean });
+  after(c); c.initLean();
+  dragPiece(c, 'PZ', ...centre(c, c.state.tops[0].node.id)); after(c);       // 𝑤 + 0 in the expression
+  assert.deepEqual(readout(c), ['𝑤 + 0']);
+  // double tap h′ in ASSUMPTIONS (two taps close together)
+  c.headTap('h2', null, 1000); c.headTap('h2', null, 1200); after(c);
+  assert.equal(c.state.ws, 'h2');
+  assert.deepEqual(readout(c), ['𝑣 + 𝑤′ = 0']);
+  let v = c.renderVals();
+  assert.equal(v.boxTitle, 'HYPOTHESIS h′');
+  assert.ok(v.eqSign, 'the = sits at the start of the second row');
+  const mini = v.heads[0].rows[2].find(k => k.slot);
+  assert.equal(mini.t, '𝑤 + 0', 'the expression waits where h′ was');
+  // a move on h′: reorder its left side, 𝑤′ + 𝑣 = 0
+  const vv = c.state.tops.find(t => t.node.key === 'v').node, w2 = c.state.tops.find(t => t.node.key === 'w2').node;
+  c.renderVals(); const p2 = c.P.get(w2.id), pv = c.P.get(vv.id);
+  dragTo(c, w2.id, pv.x - 30, pv.y + 44); after(c);
+  assert.deepEqual(readout(c), ['𝑤′ + 𝑣 = 0']);
+  assert.equal(c.exprText(c.state.hyps.find(h => h.name === 'h2').lhs, true), '𝑤′ + 𝑣', 'the hypothesis itself changed');
+  const last = calls[calls.length - 1];
+  assert.deepEqual(last[4], { hyp: 'h2', bind: null }, 'Lean gets a hypothesis step');
+  assert.deepEqual(last[1], [{ add: [{ v: 'v' }, { v: 'w2' }] }, { zero: true }]);
+  assert.deepEqual(last[2], [{ add: [{ v: 'w2' }, { v: 'v' }] }, { zero: true }]);
+  // a term can't cross the =
+  const z = c.state.tops.find(t => t.node.key === 'zero').node;
+  c.renderVals(); const pz = c.P.get(z.id);
+  dragTo(c, z.id, pz.x + 40, c.K.ZT + 159); after(c);
+  assert.deepEqual(readout(c), ['𝑤′ + 𝑣 = 0'], 'dragged across the =, it goes back');
+  // back to the expression (double tap the small box): as it was
+  c.headTap('expr', null, 5000); c.headTap('expr', null, 5100); after(c);
+  assert.equal(c.state.ws, 'expr');
+  assert.deepEqual(readout(c), ['𝑤 + 0']);
+  v = c.renderVals();
+  assert.equal(v.heads[0].rows[2].map(k => k.t).join(''), '(h : 𝑣 + 𝑤 = 0)   (h′ : 𝑤′ + 𝑣 = 0)');
+  // and h′ as it is now works as a card: on the 0 it gives 𝑤′ + 𝑣
+  const z2 = c.state.tops.find(t => t.node.key === 'zero').node;
+  dragHyp(c, 'h′', ...centre(c, z2.id)); after(c);
+  assert.deepEqual(readout(c), ['𝑤 + 𝑤′ + 𝑣']);
+  // undo shows each move undone on the board it was made on: the card move on the expression, then the reorder on h′
+  c.undo(); after(c);
+  assert.equal(c.state.ws, 'expr');
+  assert.deepEqual(readout(c), ['𝑤 + 0']);
+  c.undo(); after(c);
+  assert.equal(c.state.ws, 'h2', 'undoing a move made on h′ brings h′ back into the box');
+  assert.deepEqual(readout(c), ['𝑣 + 𝑤′ = 0']);
+  assert.equal(c.exprText(c.state.hyps.find(h => h.name === 'h2').lhs, true), '𝑣 + 𝑤′');
+  c.redo(); after(c);
+  assert.deepEqual(readout(c), ['𝑤′ + 𝑣 = 0']);
+});
+
+test('workspaces: the goal can be worked on too, and the level is won when the expression meets it', () => {
+  const calls = [];
+  const lean = { setLevel: (a, g, hy) => calls.push(['level', a, g, hy]), boardChanged: (f, t, h, w, tg) => calls.push(['move', f, t, h, tg]), subscribe: () => () => {} };
+  const c = makeLive({ store: freshStore({ v: 2, done: levelsMod.START_DONE, current: '1.26', places: {} }), lean });
+  after(c); c.initLean();
+  // double tap GOAL: 0 comes into the box; the expression waits on the GOAL line
+  const g = c.renderVals().heads[1];
+  c.headTap('goal', null, 100); c.headTap('goal', null, 300); after(c);
+  assert.equal(c.state.ws, 'goal');
+  assert.deepEqual(readout(c), ['0']);
+  const v = c.renderVals();
+  assert.equal(v.heads[1].title, 'EXPRESSION');
+  assert.equal(v.boxTitle, 'GOAL · 1.26');
+  // on the goal: 0 → 0 + 0′ (h, right to left: 𝑣 = 𝑣 + 0′)
+  const z = c.state.tops[0].node;
+  dragHyp(c, 'h', ...centre(c, z.id)); after(c);
+  assert.deepEqual(readout(c), ['0 + 0′']);
+  assert.equal(c.exprText([c.state.goal], true), '(0 + 0′)', 'the goal itself changed');
+  assert.deepEqual(calls[calls.length - 1][4], { goal: true });
+  assert.equal(c.renderVals().won, false);
+  // back to the expression: 0′ → 0′ + 0, then 0 + 0′: it meets the goal
+  c.headTap('expr', null, 900); c.headTap('expr', null, 1000); after(c);
+  assert.deepEqual(readout(c), ['0′']);
+  dragPiece(c, 'PZ', ...centre(c, c.state.tops[0].node.id)); after(c);
+  const o = c.state.tops.find(t => t.node.key === 'o').node, z0 = c.state.tops.find(t => t.node.key === 'zero').node;
+  c.renderVals(); const pz = c.P.get(z0.id);
+  dragTo(c, o.id, pz.x + pz.w + 26 + 60, pz.y + 44); after(c);
+  assert.deepEqual(readout(c), ['0 + 0′']);
+  assert.equal(c.renderVals().won, true);
+  assert.ok(c.prog.done.includes('1.26'));
+  // Lean was told the level as stated (goal 0), then the steps
+  assert.deepEqual(calls[0][2], { zero: true });
+});
+
+test('workspaces: two taps far apart are two single taps (each switches the tiles), not a double tap', () => {
+  const c = makeLive({ store: freshStore({ v: 2, done: levelsMod.START_DONE, current: '1.27', places: {} }) });
+  after(c);
+  let toggled = 0;
+  c.headTap('goal', () => { toggled++; }, 0);      // (outside a browser the toggle runs at once)
+  c.headTap('goal', () => { toggled++; }, 2000);  // too late to be a double tap: no switch, two toggles
+  assert.equal(toggled, 2);
+  assert.equal(c.state.ws, 'expr');
+});
+
+test('factoring terms that aren\'t together: Lean first gets them brought together (bracketed), then the law', () => {
+  const calls = [];
+  const lean = { setLevel: () => {}, boardChanged: (f, t, h) => calls.push([f, t, h]), subscribe: () => () => {} };
+  const c = makeLive({ lean, store: memoryStore({ v: 2, done: DONE0.concat(['1.27']) }) }); c.initLean();
+  const T = c.state.tops[0].node;
+  dragPiece(c, 'PZ', ...centre(c, T.vec.id)); after(c);
+  tap(c, T.vec.id); tapTree(c, '·');
+  const z = c.state.tops.find(t => t.node.key === 'zero').node;
+  dragTree(c, 'neg', ...centre(c, z.id)); after(c);
+  assert.deepEqual(readout(c), ['0𝑣 − (0𝑣) + 0𝑣']);
+  const prods = c.state.tops.filter(t => t.node.t === 'prod' && !c.flagged(t.node)).map(t => t.node);
+  const n0 = calls.length;
+  dragTo(c, prods[1].vec.id, ...centre(c, prods[0].vec.id)); after(c);
+  assert.deepEqual(readout(c), ['(0 + 0)𝑣 − (0𝑣)']);
+  const zv = { smul: [{ n: 0 }, { v: 'v' }] };
+  assert.deepEqual(calls.slice(n0), [
+    [{ add: [zv, { neg: zv }, zv] }, { add: [{ add: [zv, zv] }, { neg: zv }] }, null],
+    [{ add: [{ add: [zv, zv] }, { neg: zv }] }, { add: [{ smul: [{ add: [{ n: 0 }, { n: 0 }] }, { v: 'v' }] }, { neg: zv }] }, ['add_smul']]]);
+});

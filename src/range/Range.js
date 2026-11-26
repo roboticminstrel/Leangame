@@ -52,7 +52,7 @@ export class Range extends Component {
       this.hist = this.props.demo ? { entries: [{ tops: this.clone(tops), steps: [] }], idx: 0 } : L.hist;
       return Object.assign(base, {
         rules: true, trayOpen: false, trayTab: 'tray', trayItems: [], trayNew: {}, slides: {}, tiles: { assume: true, goal: true },
-        level: level, goal: this.props.demo ? this.mkV('𝑉', '0', 'zero', 'R', 110) : L.goal, hyps: this.props.demo ? [] : L.hyps, vars: this.props.demo ? null : L.vars, scalars: this.props.demo ? null : L.scalars,
+        level: level, ws: L.ws || 'expr', boards: L.boards || {}, goal: this.props.demo ? this.mkV('𝑉', '0', 'zero', 'R', 110) : L.goal, hyps: this.props.demo ? [] : L.hyps, vars: this.props.demo ? null : L.vars, scalars: this.props.demo ? null : L.scalars,
         tops: tops,
         pieces: [
           { id: 'PZS', kind: 'zeroS', x: 30, y: 600, hx: 30, hy: 600 },
@@ -140,6 +140,95 @@ export class Range extends Component {
   leanList(ns) { const ts = ns.map(n => this.leanTree(n)); return ts.length === 1 ? ts[0] : { add: ts }; }
   leanHyps() { return (this.state.hyps || []).filter(h => !h.wit).map(h => [this.leanList(h.lhs), this.leanList(h.rhs)].concat(h.bind ? [h.bind] : [])); }
   zoneTree() { return this.leanSum(this.state.tops.filter(t => this.zoneIds.indexOf(t.node.id) >= 0).map(t => t.node), 'zone'); }
+  // ---------- workspaces: the expression, the goal and each hypothesis each have a board; one is in the box at a
+  // time. A hypothesis's board is its equation in two rows (its left side, then = and its right side), each row a
+  // chain of its own ('zone' and 'zoneR'); the others have one chain ('zone').
+  isHypWs(ws) { return !!ws && ws !== 'expr' && ws !== 'goal'; }
+  zm(ws) { return this.isHypWs(ws === undefined ? this.state.ws : ws) ? this.K.ZT + 239 : Infinity; }
+  zoneSetOf(id) { return (this.zoneSets || []).find(z => z.ids.indexOf(id) >= 0) || null; }
+  inZone(id) { return !!this.zoneSetOf(id); }
+  zoneMates(id) { const z = this.zoneSetOf(id); return z ? z.ids : []; }
+  zoneKeyOf(id) { const z = this.zoneSetOf(id); return z ? z.key : null; }
+  isZoneKey(k) { return k === 'zone' || k === 'zoneR'; }
+  zoneNodes(key, tops) {
+    const z = (this.zoneSets || []).find(x => x.key === key); const ts = tops || this.state.tops;
+    return z ? this.readingOrder(z.ids.map(id => (ts.find(t => t.node.id === id) || {}).node).filter(Boolean), key) : [];
+  }
+  // what Lean sees of the board in the box: a tree, or [lhs, rhs] for a hypothesis
+  wsTree() {
+    if (this.isHypWs(this.state.ws)) return [this.leanSum(this.zoneNodes('zone'), 'zone'), this.leanSum(this.zoneNodes('zoneR'), 'zoneR')];
+    return this.zoneTree();
+  }
+  // the expression's terms, wherever its board is (in the box, or put away while another board is out)
+  boardRun(tops) { const K = this.K; return tops.filter(t => { const m = this.measure(t.node); const cy = t.y + m.h / 2; return cy > K.ZT && cy < K.ZB; }).sort((a, b) => Math.abs(a.y - b.y) > 60 ? a.y - b.y : a.x - b.x).map(t => t.node); }
+  exprRun() { const St = this.state; return (!St.ws || St.ws === 'expr') ? this.zoneNodes('zone') : this.boardRun((St.boards || {}).expr || []); }
+  runCanon(ns) { return ns.length === 1 ? this.canon(ns[0]) : 'g(' + ns.map(n => this.canon(n)).sort().join('+') + ')'; }
+  isWon() { const St = this.state; if (this.props.legacy || !St.goal) return false; const run = this.exprRun(); return run.length > 0 && this.runCanon(run) === this.canon(St.goal); }
+  wsTitle(ws) { if (!ws || ws === 'expr') return 'EXPRESSION'; if (ws === 'goal') return 'GOAL · ' + (this.state.level || ''); const h = (this.state.hyps || []).find(x => x.name === ws); return 'HYPOTHESIS ' + (h ? h.label : ''); }
+  // a board seen for the first time: the goal's terms in a row, or a hypothesis's sides in two
+  wsStart(target, goalIn, hypsIn) {
+    const K = this.K; const row = (ns, y) => ns.map((n, i) => ({ node: this.cloneFresh(n), x: 24 + i * 200, y: y }));
+    if (target === 'goal') { const g = goalIn || this.state.goal; return row(g.t === 'sum' && !this.flagged(g) ? g.terms.map(t => t.node) : [g], K.ZT + 110); }
+    const h = (hypsIn || this.state.hyps || []).find(x => x.name === target);
+    return row(h.lhs, K.ZT + 110).concat(row(h.rhs, K.ZT + 270));
+  }
+  // Put this board away and bring another into the box. The board left keeps its state. Animated unless instant:
+  // the tiles fall away into the distance, the box shrinks to its heading and readout, the two swing past each other
+  // (the box's one up into the header, the other down into the box), and the new tiles come in from far away.
+  switchWs(target, opts) {
+    const St = this.state; const cur = St.ws || 'expr';
+    if (!target || target === cur || this.drag || this.idrag || this.hdrag || St.wsAnim) return;
+    if (this.isHypWs(target) && !(St.hyps || []).some(h => h.name === target)) return;
+    const boards = Object.assign({}, St.boards || {}, { [cur]: this.clone(St.tops) });
+    const next = boards[target] ? this.clone(boards[target]) : this.wsStart(target);
+    const commit = () => { this._wsSwitch = true; this.setState({ ws: target, boards: boards, tops: this.normTops(this.tidy(next, target)), tree: null, zeroHover: null, preview: null, slides: {}, slide: null }); };
+    if ((opts && opts.instant) || typeof window === 'undefined') { commit(); return; }
+    const zb = this._zb || { l: 14, r: 300, t: this.K.ZT, b: this.K.ZT + 120 };
+    const heads = this.headVals();
+    const fromSlot = this.slotPos(heads, target), toSlot = this.slotPos(heads, cur === 'expr' ? target : cur);
+    const ro = this.state.tops.length ? this.readoutOf(this.state.tops) : null;
+    const a = { title: this.wsTitle(cur), text: ro ? ro.tokens.map(k => k.t).join('') : '' };
+    const b = { title: this.wsTitle(target), text: this.wsText(target) };
+    const anim = { from: cur, to: target, vp: { x: (zb.l + zb.r) / 2, y: (zb.t + zb.b) / 2 }, fly: [
+      Object.assign({ x0: 28, y0: this.K.ZT + 6, x1: toSlot.x, y1: toSlot.y }, a), Object.assign({ x0: fromSlot.x, y0: fromSlot.y, x1: 28, y1: this.K.ZT + 6 }, b)] };
+    this.setState({ wsAnim: Object.assign({ phase: 'out' }, anim) });
+    clearTimeout(this._wsT1); clearTimeout(this._wsT2); clearTimeout(this._wsT3);
+    this._wsT1 = setTimeout(() => { commit(); this.setState({ wsAnim: Object.assign({ phase: 'swing' }, anim) }); }, 340);
+    this._wsT2 = setTimeout(() => this.setState({ wsAnim: Object.assign({ phase: 'in' }, anim) }), 340 + 520);
+    this._wsT3 = setTimeout(() => this.setState({ wsAnim: null }), 340 + 520 + 560);
+  }
+  // Taps in the header: a single tap does its usual thing (toggle the tiles) a moment later, unless a second tap
+  // on the same thing comes first: then that thing's board comes into the box
+  headTap(target, toggle, now) {
+    const t = now != null ? now : Date.now(); const last = this._lastTap;
+    clearTimeout(this._tapT);
+    if (target && last && last.target === target && t - last.t < 380) { this._lastTap = null; this.switchWs(target); return; }
+    this._lastTap = { target: target, t: t };
+    if (!toggle) return;
+    if (!target || typeof window === 'undefined') { toggle(); return; }
+    this._tapT = setTimeout(toggle, 300);
+  }
+  // a board's readout as text, when it isn't in the box
+  wsText(ws) {
+    const St = this.state;
+    if (ws === 'expr') return this.exprText(this.exprRun(), true);
+    if (ws === 'goal') return this.exprText(St.goal.t === 'sum' && !this.flagged(St.goal) ? St.goal.terms.map(t => t.node) : [St.goal], true);
+    const h = (St.hyps || []).find(x => x.name === ws); return h ? this.exprText(h.lhs, true) + ' = ' + this.exprText(h.rhs, true) : '';
+  }
+  // where a board's place in the header is (world units): the GOAL line, or a hypothesis in ASSUMPTIONS
+  slotPos(heads, ws) {
+    const H = heads || [];
+    if (ws === 'goal' || ws === 'expr') { const g = H[1]; return { x: 28, y: (g ? g.y : this.K.GY) + 30 }; }
+    const A = H[0]; if (!A) return { x: 28, y: this.K.AY };
+    for (let ri = 0; ri < A.rows.length; ri++) {
+      let x = 28;
+      for (const k of A.rows[ri]) {
+        if ((k.hyp && k.hyp.name === ws) || (k.slot && k.ws === ws)) return { x: x, y: A.y + 27 + ri * 58 + 9 };
+        x += (k.tile ? k.width : k.w) + (k.hyp || k.slot ? 24 : 0);
+      }
+    }
+    return { x: 28, y: A.y + 27 };
+  }
   // ---------- levels: a level's place is its move history (each entry the board after a move, with the Lean steps
   // that move sent) and where in it the player is ----------
   // the header's height depends on the level: a line for its vectors and one for its hypotheses, when it has them
@@ -155,7 +244,12 @@ export class Range extends Component {
   relayout(hyps, tops) {
     const old = this.K.ZT; this.layoutFor(this.state.level, hyps);
     const d = this.K.ZT - old;
-    if (d) tops.forEach(t => { t.y += d; });
+    if (d) {
+      tops.forEach(t => { t.y += d; });
+      const b = this.state.boards || {}; const nb = {};
+      Object.keys(b).forEach(k => { nb[k] = b[k].map(t => Object.assign({}, t, { y: t.y + d })); });
+      this.setState({ boards: nb });
+    }
     return tops;
   }
   loadLevel(id) {
@@ -166,7 +260,8 @@ export class Range extends Component {
     if (place && place.entries && place.entries[place.idx]) {
       this.bumpUid(place.entries);
       const e = place.entries[place.idx];
-      return Object.assign(extra, { tops: this.clone(e.tops), hyps: e.hyps ? this.clone(e.hyps) : extra.hyps, hist: { entries: place.entries, idx: place.idx } });
+      return Object.assign(extra, { tops: this.clone(e.tops), hyps: e.hyps ? this.clone(e.hyps) : extra.hyps, goal: e.goal ? this.clone(e.goal) : extra.goal,
+        ws: e.ws || 'expr', boards: e.boards ? this.clone(e.boards) : {}, hist: { entries: place.entries, idx: place.idx } });
     }
     const tops = b.start.map((n, i) => ({ node: n, x: 24 + i * 200, y: this.K.ZT + 110 }));
     return Object.assign(extra, { tops: tops, hist: { entries: [{ tops: this.clone(tops), steps: [] }], idx: 0 } });
@@ -188,7 +283,7 @@ export class Range extends Component {
     const L = this.loadLevel(id);
     this.layoutFor(id, L.hyps);
     this.hist = L.hist; this._histKey = null; this._resync = true;
-    this.setState({ level: id, goal: L.goal, hyps: L.hyps, vars: L.vars, scalars: L.scalars, tops: this.normTops(this.tidy(L.tops)), tree: null, trayClosing: true, histAnim: true, zeroHover: null, preview: null });
+    this.setState({ level: id, goal: L.goal, hyps: L.hyps, vars: L.vars, scalars: L.scalars, ws: L.ws || 'expr', boards: L.boards || {}, wsAnim: null, tops: this.normTops(this.tidy(L.tops, L.ws || 'expr')), tree: null, trayClosing: true, histAnim: true, zeroHover: null, preview: null });
     clearTimeout(this._tc); this._tc = setTimeout(() => this.setState({ trayOpen: false, trayClosing: false, trayTab: 'tray' }), 220);
     clearTimeout(this._ha); this._ha = setTimeout(() => this.setState({ histAnim: false }), 450);
     this.prog.current = id; this.store.save(this.prog);
@@ -202,13 +297,14 @@ export class Range extends Component {
     else k = 'g(' + this.readingOrder(n.terms.map(t => t.node), n.id).map(x => this.okey(x)).join('+') + ')';
     return (n.neg ? '-' : '') + k + (n.inv ? '^-1' : '');
   }
-  histKey() { return this.readingOrder(this.state.tops.filter(t => this.zoneIds.indexOf(t.node.id) >= 0).map(t => t.node), 'zone').map(n => this.okey(n)).join(' + '); }
+  histKey() { return (this.state.ws || 'expr') + ':' + (this.zoneSets || [{ key: 'zone' }]).map(z => this.zoneNodes(z.key).map(n => this.okey(n)).join(' + ')).join(' = '); }
   canUndo() { return !!this.hist && this.hist.idx > 0; }
   canRedo() { return !!this.hist && this.hist.idx < this.hist.entries.length - 1; }
   undo() {
     if (!this.canUndo() || this.drag) return;
     const e = this.hist.entries[this.hist.idx]; this.hist.idx--;
-    this.restore(this.hist.entries[this.hist.idx], { steps: e.steps.slice().reverse().map(st => [st[1], st[0], st[2]]) });
+    // shown on the board the undone move was made on
+    this.restore(this.hist.entries[this.hist.idx], { steps: e.steps.slice().reverse().map(st => [st[1], st[0], st[2], null, st[4] || null]) }, e.ws || 'expr');
   }
   redo() {
     if (!this.canRedo() || this.drag) return;
@@ -221,31 +317,42 @@ export class Range extends Component {
     this.hist.idx = 0;
     this.restore(this.hist.entries[0], { restart: true, steps: [] });
   }
-  restore(entry, R) {
+  restore(entry, R, wsWanted) {
     this._restoring = R;
     const lv = LEVELS[this.state.level];
     const hyps = entry.hyps ? this.clone(entry.hyps) : (lv ? (lv.build(this).hyps || []) : (this.state.hyps || []));
     if (!this.props.demo) this.layoutFor(this.state.level, hyps); // the header for that moment, then the row under it
-    this.setState({ hyps: hyps, tops: this.normTops(this.tidy(this.clone(entry.tops))), histAnim: true, zeroHover: null, preview: null, slide: null, slides: {} });
+    const goal = entry.goal ? this.clone(entry.goal) : (lv ? lv.build(this).goal : this.state.goal);
+    let ws = entry.ws || 'expr'; const boards = entry.boards ? this.clone(entry.boards) : {};
+    let tops = this.clone(entry.tops);
+    if (wsWanted && wsWanted !== ws && (wsWanted === 'goal' || wsWanted === 'expr' || hyps.some(h => h.name === wsWanted))) {
+      boards[ws] = tops; tops = boards[wsWanted] ? boards[wsWanted] : this.wsStart(wsWanted, goal, hyps); ws = wsWanted;
+    }
+    this.setState({ hyps: hyps, goal: goal, ws: ws, boards: boards, wsAnim: null,
+      tops: this.normTops(this.tidy(tops, ws)), histAnim: true, zeroHover: null, preview: null, slide: null, slides: {} });
     clearTimeout(this._ha); this._ha = setTimeout(() => this.setState({ histAnim: false }), 450);
   }
   // aligned spots: the expression's terms in one row, in reading order, brackets lined up inside
-  tidy(tops) {
-    const K = this.K;
-    const inZone = t => { const m = this.measure(t.node); const cy = t.y + m.h / 2; return cy > K.ZT && cy < K.ZB; };
+  tidy(tops, ws) {
+    const K = this.K; const ZM = this.zm(ws);
+    const cyOf = t => t.y + this.measure(t.node).h / 2;
+    const inZone = t => { const cy = cyOf(t); return cy > K.ZT && cy < K.ZB; };
     const zone = tops.filter(inZone).sort((a, b) => Math.abs(a.y - b.y) > 60 ? a.y - b.y : a.x - b.x);
-    const cy = K.ZT + 110 + 49;
-    let x = 24 + (zone[0] && this.negCluster(zone[0].node) ? 46 : 0);
-    zone.forEach(t => {
-      this.walk(t.node, m => { if (m.t === 'sum') this.rowArrange(m); }, null, null);
-      const m = this.measure(t.node); t.x = x; t.y = cy - m.h / 2; x += m.w + K.GAP;
+    // one row; a hypothesis gets two, its left side and (after the =) its right side
+    const rows = ZM < Infinity ? [zone.filter(t => cyOf(t) < ZM), zone.filter(t => cyOf(t) >= ZM)] : [zone];
+    rows.forEach((row, ri) => {
+      const cy = K.ZT + 110 + 49 + ri * 160;
+      let x = 24 + (ri ? 56 : 0) + (row[0] && this.negCluster(row[0].node) ? 46 : 0);
+      row.forEach(t => {
+        this.walk(t.node, m => { if (m.t === 'sum') this.rowArrange(m); }, null, null);
+        const m = this.measure(t.node); t.x = x; t.y = cy - m.h / 2; x += m.w + K.GAP;
+      });
     });
     return tops;
   }
   // won: the expression is exactly the goal; the level's node is done (which can open new ones in the graph)
   checkWin() {
-    const zt = this.zoneIds.length === 1 ? this.state.tops.find(t => t.node.id === this.zoneIds[0]) : null;
-    if (zt && this.state.goal && this.canon(zt.node) === this.canon(this.state.goal) && this.prog.done.indexOf(this.state.level) < 0) {
+    if (this.isWon() && this.prog.done.indexOf(this.state.level) < 0) {
       this.prog.done = this.prog.done.concat([this.state.level]);
     }
   }
@@ -257,11 +364,14 @@ export class Range extends Component {
     if (this.drag || this.pdrag || this.idrag) return;
     const L = this.props.lean;
     if (this._resync) { this._resync = false; this.syncLean(); return; }
+    // another board came into the box: nothing moved, Lean now follows that board
+    if (this._wsSwitch) { this._wsSwitch = false; this._histKey = this.histKey(); this._leanTree = this.wsTree(); return; }
     const key = this.histKey();
     if (this._histKey == null) this._histKey = key;
     if (key === this._histKey) { this._hint = null; return; }
     this._histKey = key;
-    const t = this.zoneTree(); const from = this._leanTree; this._leanTree = t;
+    const t = this.wsTree(); const from = this._leanTree; this._leanTree = t;
+    const St = this.state; const ws = St.ws || 'expr';
     const R = this._restoring; this._restoring = null;
     let steps;
     if (R) steps = R.steps;
@@ -273,20 +383,34 @@ export class Range extends Component {
       if (sg) {
         // a split: the law makes the pair as one bracket, then the bracket opens into the sum or product (a witness
         // from the inverse axiom is obtained first, with that step)
-        this._leanGroup = sg; const m2 = this.zoneTree(); this._leanGroup = null;
+        this._leanGroup = sg; const m2 = this.wsTree(); this._leanGroup = null;
         steps.push([from, m2, this._hint || null].concat(this._witness ? [this._witness] : []), [m2, t, null]);
         this._witness = null;
       } else if (mid && JSON.stringify(mid) !== JSON.stringify(from)) steps.push([from, mid, null], [mid, t, this._hint || null]);
       else steps.push([from, t, this._hint || null]);
+      // a move on the goal or on a hypothesis changes it (and Lean gets it as a goal or hypothesis step)
+      let goal = St.goal, hyps = St.hyps || [], target = null;
+      if (ws === 'goal') {
+        const run = this.zoneNodes('zone').map(n => this.clone(n));
+        if (run.length) { goal = run.length === 1 ? run[0] : this.mkSum(run.map(n => ({ node: n, x: 0, y: 0 }))); this.setState({ goal: goal }); }
+        target = { goal: true };
+      } else if (this.isHypWs(ws)) {
+        const L = this.zoneNodes('zone').map(n => this.clone(n)), Rr = this.zoneNodes('zoneR').map(n => this.clone(n));
+        const h0 = hyps.find(h => h.name === ws);
+        hyps = hyps.map(h => h.name === ws ? Object.assign({}, h, { lhs: L, rhs: Rr }) : h);
+        this.setState({ hyps: hyps });
+        target = { hyp: ws, bind: (h0 && h0.bind) || null };
+      }
+      steps = steps.map(st => [st[0], st[1], st[2], st[3] || null, target]);
       const H = this.hist;
-      H.entries = H.entries.slice(0, H.idx + 1).concat([{ tops: this.clone(this.state.tops), steps: steps, hyps: this.clone(this.state.hyps || []) }]);
+      H.entries = H.entries.slice(0, H.idx + 1).concat([{ tops: this.clone(St.tops), steps: steps, hyps: this.clone(hyps), goal: this.clone(goal), ws: ws, boards: this.clone(St.boards || {}) }]);
       if (H.entries.length > 200) H.entries = H.entries.slice(H.entries.length - 200);
       H.idx = H.entries.length - 1;
       this.checkWin();
     }
     if (L) {
-      if (R && R.restart) L.setLevel(t, this.leanTree(this.state.goal), this.leanHyps());
-      else steps.forEach(st => L.boardChanged(st[0], st[1], st[2], st[3] || null));
+      if (R && R.restart) this.leanLevel(L);
+      else steps.forEach(st => L.boardChanged(st[0], st[1], st[2], st[3] || null, st[4] || null));
     }
     this.savePlace();
     this._hint = null;
@@ -300,11 +424,20 @@ export class Range extends Component {
   }
   // the live proof for the current level: from its start, with the moves up to where the player is replayed
   syncLean() {
-    this._leanTree = this.zoneTree(); this._histKey = this.histKey();
+    this._leanTree = this.wsTree(); this._histKey = this.histKey();
     const L = this.props.lean; if (!L) return;
-    const H = this.hist; const first = H.idx > 0 && H.entries[1].steps[0];
-    L.setLevel(first ? first[0] : this._leanTree, this.leanTree(this.state.goal), this.leanHyps());
-    for (let i = 1; i <= H.idx; i++) H.entries[i].steps.forEach(st => L.boardChanged(st[0], st[1], st[2], st[3] || null));
+    const H = this.hist;
+    this.leanLevel(L);
+    for (let i = 1; i <= H.idx; i++) H.entries[i].steps.forEach(st => L.boardChanged(st[0], st[1], st[2], st[3] || null, st[4] || null));
+  }
+  // the theorem as the level states it (moves on the goal and the hypotheses come later, as steps)
+  leanLevel(L) {
+    const H = this.hist; const e0 = H && H.entries[0];
+    const lv = LEVELS[this.state.level];
+    const b = lv && !this.props.demo ? lv.build(this) : null;
+    const start = e0 && !this.props.demo ? this.leanSum(this.boardRun(e0.tops), 'start') : (this.state.ws === 'expr' || !this.state.ws ? this.zoneTree() : null);
+    const hyps = b ? (b.hyps || []).map(h => [this.leanList(h.lhs), this.leanList(h.rhs)].concat(h.bind ? [h.bind] : [])) : this.leanHyps();
+    L.setLevel(start || this.zoneTree(), this.leanTree(b ? b.goal : this.state.goal), hyps);
   }
   componentDidMount() {
     this.initLean();
@@ -623,7 +756,12 @@ export class Range extends Component {
     tops.forEach(t => { this.measure(t.node); this.place(t.node, t.x, t.y, 0, { z: 4 }); });
     const zoneItems = tops.filter(t => { const p = this.P.get(t.node.id); const cy = p.y + p.h / 2; return cy > this.K.ZT && cy < this.K.ZB; });
     this.zoneIds = zoneItems.map(t => t.node.id);
-    this.zonePath = this.plusesFor(zoneItems.map(t => this.P.get(t.node.id)), 3, 'zone', R.pluses, zoneItems.map(t => t.node));
+    const ZM = this.zm(); const cyOf = t => { const p = this.P.get(t.node.id); return p.y + p.h / 2; };
+    const bands = ZM < Infinity ? [['zone', zoneItems.filter(t => cyOf(t) < ZM)], ['zoneR', zoneItems.filter(t => cyOf(t) >= ZM)]] : [['zone', zoneItems]];
+    this.zoneSets = bands.map(([k, its]) => ({ key: k, ids: its.map(t => t.node.id) }));
+    this.zonePaths = {};
+    bands.forEach(([k, its]) => { this.zonePaths[k] = this.plusesFor(its.map(t => this.P.get(t.node.id)), 3, k, R.pluses, its.map(t => t.node)); });
+    this.zonePath = this.zonePaths.zone;
     return R;
   }
   place(n, x, y, depth, ctx) {
@@ -768,9 +906,9 @@ export class Range extends Component {
     const zn = loc.node;
     const isZero = (zn.t === 's' && zn.val === '0') || (zn.t === 'v' && zn.key === 'zero');
     if (isZero && role === 'self') {
-      const inZone = loc.kind === 'top' && this.zoneIds.indexOf(zn.id) >= 0;
+      const inZone = loc.kind === 'top' && this.inZone(zn.id);
       if (loc.kind === 'term' || inZone) {
-        const chain = loc.kind === 'term' ? loc.parent.terms.map(t => t.node.id) : this.zoneIds.slice();
+        const chain = loc.kind === 'term' ? loc.parent.terms.map(t => t.node.id) : this.zoneMates(zn.id).slice();
         d.absorb = { chain: chain.filter(x => x !== zn.id) };
       } else if (loc.kind === 'top') {
         const zt = this.typeOf(zn);
@@ -869,7 +1007,18 @@ export class Range extends Component {
     if (d.zeroHover && (d.zeroHover.zs ? this.applyZeroSmul(d) : d.zeroHover.cancel ? this.applyCancel(d) : d.absorbOne ? this.absorbOne(d) : d.absorb ? this.absorbZero(d) : this.dropZero(d))) return;
     if (d.rules && d.preview) { this.applyPreview(d); return; }
     if (d.mode === 'reorder') { this._hint = ['mul_comm']; this.setState({ override: null, dragIds: null, preview: null }); return; }
-    if (d.mode === 'move') { this.setState({ dragIds: null, preview: null }); return; }
+    if (d.mode === 'move') {
+      // on a hypothesis's board a term stays on its side of the =
+      if (this.isHypWs(this.state.ws) && d.blockId) {
+        const ZM = this.zm(); const side = (ts) => { const t = ts.find(u => u.node.id === d.blockId); if (!t) return null; const cy = t.y + this.measure(t.node).h / 2; return cy > this.K.ZT && cy < this.K.ZB ? (cy < ZM ? 'L' : 'R') : 'out'; };
+        const was = side(d.orig), now = side(this.state.tops);
+        if (was && now && was !== now) {
+          this.setState({ tops: this.clone(d.orig), dragIds: null, preview: null, override: null });
+          this.flash(this.P.get(d.blockId), 'a term stays on its side of the =', 'bad'); return;
+        }
+      }
+      this.setState({ dragIds: null, preview: null }); return;
+    }
     this.dropSand(d);
   }
   sig(n) {
@@ -925,7 +1074,7 @@ export class Range extends Component {
     else return null;
     const tl = this.locate(orig, T.id); let terms, cont;
     if (tl.kind === 'term') { terms = tl.parent.terms.map(t => t.node); cont = { type: 'sum', id: tl.parent.id }; }
-    else if (tl.kind === 'top' && this.zoneIds.indexOf(T.id) >= 0) { terms = this.zoneIds.map(id => (orig.find(t => t.node.id === id) || {}).node).filter(Boolean); cont = { type: 'zone', ids: this.zoneIds.slice() }; }
+    else if (tl.kind === 'top' && this.inZone(T.id)) { const zi = this.zoneMates(T.id).slice(); terms = zi.map(id => (orig.find(t => t.node.id === id) || {}).node).filter(Boolean); cont = { type: 'zone', ids: zi }; }
     else return null;
     if (terms.length < 2) return null;
     const gsig = this.sig(loc.node); let hit = false;
@@ -947,7 +1096,7 @@ export class Range extends Component {
   termsOf(orig, T) {
     const tl = this.locate(orig, T.id);
     if (tl.kind === 'term') return { terms: tl.parent.terms.map(t => t.node), cont: { type: 'sum', id: tl.parent.id } };
-    if (tl.kind === 'top' && this.zoneIds.indexOf(T.id) >= 0) return { terms: this.zoneIds.map(id => (orig.find(t => t.node.id === id) || {}).node).filter(Boolean), cont: { type: 'zone', ids: this.zoneIds.slice() } };
+    if (tl.kind === 'top' && this.inZone(T.id)) { const zi = this.zoneMates(T.id).slice(); return { terms: zi.map(id => (orig.find(t => t.node.id === id) || {}).node).filter(Boolean), cont: { type: 'zone', ids: zi } }; }
     return null;
   }
   findVecPreview(orig, loc, cx, cy) {
@@ -980,8 +1129,27 @@ export class Range extends Component {
     let cur = 0;
     S.terms.forEach(t => { const m = this.measure(t.node); t.x = cur; t.y = -m.h / 2; cur += m.w + 52; });
   }
+  // Factoring terms that aren't together at the front of their chain: Lean nests sums to the left, so the terms being
+  // factored aren't one sub-expression and the law can't reach them. Lean first gets a rearranging step that brings
+  // them together, bracketed, where the first of them was; then the law.
+  leanPairUp(orig, pv) {
+    const ids = pv.type === 'collectV' ? pv.matched : Object.keys(pv.matches || {});
+    // the order as it was before the drag (the dragged term now sits on its target)
+    let key, ents;
+    if (pv.cont.type === 'sum') { const S = this.locate(orig, pv.cont.id).node; key = S.id; ents = S.terms; }
+    else { key = this.zoneKeyOf(pv.cont.ids[0]) || 'zone'; ents = pv.cont.ids.map(id => orig.find(t => t.node.id === id)).filter(Boolean); }
+    const order = ents.slice().sort((a, b) => Math.abs(a.y - b.y) > 60 ? a.y - b.y : a.x - b.x).map(t => t.node.id);
+    if (ids.length < 2 || ids.length >= order.length) return;
+    if (order.slice(0, ids.length).every(id => ids.indexOf(id) >= 0)) return; // already together at the front
+    const together = order.filter(id => ids.indexOf(id) >= 0), rest = order.filter(id => ids.indexOf(id) < 0);
+    const first = order.findIndex(id => ids.indexOf(id) >= 0);
+    this._orderOverride = { key: key, ids: rest.slice(0, first).concat(together, rest.slice(first)) };
+    this._leanGroup = { key: key, parts: [together] };
+    this._leanMid = this.wsTree(); this._orderOverride = null; this._leanGroup = null;
+  }
   applyPreview(d) {
     const pv = d.preview; const tops = this.clone(d.orig);
+    if (pv.type === 'collect' || pv.type === 'collectV') this.leanPairUp(d.orig, pv);
     this._hint = pv.type === 'expandV' || pv.type === 'collectV' ? ['add_smul'] : ['smul_add', 'mul_add', 'add_mul'];
     if (pv.type === 'expandV') {
       const loc = this.locate(tops, pv.pid); const P = loc.node;
@@ -1233,7 +1401,7 @@ export class Range extends Component {
       const A = this.locate(d.tops, d.blockId); if (!A) return;
       let members, key;
       if (A.kind === 'term') { members = A.parent.terms.map(t => t.node); key = A.parent.id; }
-      else if (A.kind === 'top' && this.zoneIds.indexOf(A.node.id) >= 0) { members = d.tops.filter(t => this.zoneIds.indexOf(t.node.id) >= 0).map(t => t.node); key = 'zone'; }
+      else if (A.kind === 'top' && this.inZone(A.node.id)) { const zi = this.zoneMates(A.node.id); members = d.tops.filter(t => zi.indexOf(t.node.id) >= 0).map(t => t.node); key = this.zoneKeyOf(A.node.id); }
       else return;
       const X = this.inverseAdd(A.node); if (!X) return;
       d.cancel = { kind: 'add', key: key, aId: A.node.id, chainIds: this.readingOrder(members, key).map(m => m.id), X: X };
@@ -1270,11 +1438,11 @@ export class Range extends Component {
     // for Lean: the same terms with A moved right after its twin (then the law applies to neighbours)
     const order = L.chainIds.filter(id => id !== L.aId); order.splice(order.indexOf(ids[ids.length - 1]) + 1, 0, L.aId);
     this._orderOverride = { key: L.key, ids: order }; this._leanGroup = { key: L.key, parts: [ids, [L.aId]] };
-    this._leanMid = this.zoneTree(); this._orderOverride = null; this._leanGroup = null;
+    this._leanMid = this.wsTree(); this._orderOverride = null; this._leanGroup = null;
     const res = L.kind === 'add' ? (ty.k === 'v' ? this.mkV(ty.sp, '0', 'zero', ty.f || null, this.K.ZW) : this.mkS(ty.f, '0', '0')) : this.mkS(ty.f, '1', '1');
     this.setRef(tops, this.locate(tops, ids[0]), res);
     ids.slice(1).concat([L.aId]).forEach(id => { const l = this.locate(tops, id); if (l) this.setRef(tops, l, null); });
-    if (L.kind === 'add' && L.key !== 'zone') {
+    if (L.kind === 'add' && !this.isZoneKey(L.key)) {
       const sl = this.locate(tops, L.key);
       if (sl && sl.node.t === 'sum' && !this.flagged(sl.node) && sl.node.terms.length === 1) {
         if (sl.kind === 'top') tops[sl.ti].x += this.sumPadL(sl.node) + 26 + this.K.SPAD;
@@ -1419,6 +1587,14 @@ export class Range extends Component {
   }
   // The readout of the expression as it stands: its tokens, whether its terms can be added, and its value
   readoutOf(tops) {
+    if (this.isHypWs(this.state.ws)) {
+      // a hypothesis: its two sides, = between; each side all one type, and the same type on both
+      const side = key => { const z = (this.zoneSets || []).find(x => x.key === key); return z ? this.readingOrder(z.ids.map(id => (tops.find(t => t.node.id === id) || {}).node).filter(Boolean), key) : []; };
+      const L = side('zone'), Rr = side('zoneR'); if (!L.length && !Rr.length) return null;
+      const ty = ns => { const ts = ns.map(n => this.typeOf(n)); return ts.length && ts.every(t => (t.k === 's' || t.k === 'v') && t.k === ts[0].k && (t.k === 's' ? t.f === ts[0].f : t.sp === ts[0].sp)) ? ts[0] : null; };
+      const a = ty(L), b = ty(Rr);
+      return { tokens: this.exprTokens(L, true).concat([{ t: ' = ', id: null }], this.exprTokens(Rr, true)), ok: !!(a && b && a.k === b.k), val: null, eq: true };
+    }
     const zoneTops = tops.filter(t => this.zoneIds.indexOf(t.node.id) >= 0);
     if (!zoneTops.length) return null;
     const types = zoneTops.map(t => this.typeOf(t.node));
@@ -1507,7 +1683,7 @@ export class Range extends Component {
     };
     let key = null;
     if (loc.kind === 'term') { key = loc.parent.id; two(loc.parent.terms, loc.parent.terms[loc.idx], () => true); }
-    else if (loc.kind === 'top' && this.zoneIds.indexOf(Z.id) >= 0) { key = 'zone'; two(tops, tops[loc.ti], u => this.zoneIds.indexOf(u.node.id) >= 0); }
+    else if (loc.kind === 'top' && this.inZone(Z.id)) { const zi = this.zoneMates(Z.id); key = this.zoneKeyOf(Z.id); two(tops, tops[loc.ti], u => zi.indexOf(u.node.id) >= 0); }
     else {
       const S = this.mkSum([{ node: a, x: 0, y: 0 }, { node: b, x: 0, y: 0 }]); this.rowArrange(S);
       if (loc.kind === 'top') tops[loc.ti].x -= this.sumPadL(S) + 26 + K.SPAD;
@@ -1524,8 +1700,10 @@ export class Range extends Component {
       n.terms.forEach(u => { if (this.ids(u.node).indexOf(id) >= 0) { const d = (this.P.get(n.id) || {}).depth || 0; if (!best || d >= best.d) best = { d: d, key: n.id, member: u.node, list: n.terms.map(x => x.node) }; } });
     }, null, null));
     if (best) return best;
-    const zt = tops.find(t => this.zoneIds.indexOf(t.node.id) >= 0 && this.ids(t.node).indexOf(id) >= 0);
-    return zt ? { key: 'zone', member: zt.node, list: tops.filter(t => this.zoneIds.indexOf(t.node.id) >= 0).map(t => t.node) } : null;
+    const zt = tops.find(t => this.inZone(t.node.id) && this.ids(t.node).indexOf(id) >= 0);
+    if (!zt) return null;
+    const zi = this.zoneMates(zt.node.id);
+    return { key: this.zoneKeyOf(zt.node.id), member: zt.node, list: tops.filter(t => zi.indexOf(t.node.id) >= 0).map(t => t.node) };
   }
   hypTarget(h, cx, cy) {
     let tile = null;
@@ -1558,14 +1736,15 @@ export class Range extends Component {
   }
   applyHyp(hit) {
     const H = hit.hyp; const tops = this.clone(this.state.tops);
-    const list = H.key === 'zone' ? tops : this.locate(tops, H.key).node.terms;
-    const inChain = H.key === 'zone' ? (t => this.zoneIds.indexOf(t.node.id) >= 0) : (() => true);
+    const list = this.isZoneKey(H.key) ? tops : this.locate(tops, H.key).node.terms;
+    const zi = this.zoneMates(H.ids[0]);
+    const inChain = this.isZoneKey(H.key) ? (t => zi.indexOf(t.node.id) >= 0) : (() => true);
     const ents = H.ids.map(id => list.find(t => t.node.id === id));
     const first = ents[0]; const i0 = list.indexOf(first);
     const oldW = ents.reduce((a, t) => a + this.measure(t.node).w, 0) + this.K.GAP * (ents.length - 1);
     const right = Math.max(...ents.map(t => t.x + this.measure(t.node).w));
     const cy = first.y + this.measure(first.node).h / 2;
-    if (H.ids.length > 1) { this._leanGroup = { key: H.key, parts: [H.ids] }; this._leanMid = this.zoneTree(); this._leanGroup = null; }
+    if (H.ids.length > 1) { this._leanGroup = { key: H.key, parts: [H.ids] }; this._leanMid = this.wsTree(); this._leanGroup = null; }
     const fresh = H.to.map(n => this.cloneFresh(n));
     let x = first.x;
     const added = fresh.map(n => { const m = this.measure(n); const e = { node: n, x: x, y: cy - m.h / 2 }; x += m.w + this.K.GAP; return e; });
@@ -1690,7 +1869,7 @@ export class Range extends Component {
       list.splice(list.indexOf(t) + 1, 0, { node: z, x: t.x + m.w + K.GAP, y: t.y + m.h / 2 - 44 });
     };
     if (loc.kind === 'term') { beside(loc.parent.terms, loc.parent.terms[loc.idx], () => true); return z; }
-    if (loc.kind === 'top' && this.zoneIds.indexOf(X.id) >= 0) { beside(tops, tops[loc.ti], u => this.zoneIds.indexOf(u.node.id) >= 0); return z; }
+    if (loc.kind === 'top' && this.inZone(X.id)) { const zi = this.zoneMates(X.id); beside(tops, tops[loc.ti], u => zi.indexOf(u.node.id) >= 0); return z; }
     const S = this.mkSum([{ node: X, x: 0, y: 0 }, { node: z, x: m.w + K.GAP, y: m.h / 2 - 44 }]);
     if (loc.kind === 'top') {
       const t = tops[loc.ti];
@@ -1792,11 +1971,13 @@ export class Range extends Component {
       let cur = slots[order[0]].x;
       order.forEach(i => { slots[i].x = cur; slots[i].y = cy - boxes[i].h / 2; cur += boxes[i].w + this.K.GAP; });
     };
-    if (gid === 'zone') {
-      const items = this.zoneIds.map(id => tops.find(t => t.node.id === id)).filter(Boolean);
+    if (this.isZoneKey(gid)) {
+      const zs = (this.zoneSets || []).find(z => z.key === gid); if (!zs) return;
+      const items = zs.ids.map(id => tops.find(t => t.node.id === id)).filter(Boolean);
       const boxes = items.map(t => this.P.get(t.node.id));
-      // slots and boxes in the same (world) units; the row's top stays below the readout
-      lineUp(items, items.map((t, i) => ({ x: t.x, y: t.y, w: boxes[i].w, h: boxes[i].h })), this.zonePath.slice(), this.K.ZT + 104);
+      // slots and boxes in the same (world) units; the row's top stays below the readout (a hypothesis's second
+      // row, below the split)
+      lineUp(items, items.map((t, i) => ({ x: t.x, y: t.y, w: boxes[i].w, h: boxes[i].h })), (this.zonePaths[gid] || []).slice(), gid === 'zoneR' ? this.zm() + 6 : this.K.ZT + 104);
     } else {
       const loc = this.locate(tops, gid); if (!loc) return;
       const S = loc.node;
@@ -2021,15 +2202,18 @@ export class Range extends Component {
     const side = ns => this.exprText(ns, true); // the readout's notation
     const htext = h => '(' + h.label + ' : ' + (h.forall || '') + side(h.lhs) + ' = ' + side(h.rhs) + ')';
     const own = (St.hyps || []).filter(h => !h.wit), wits = (St.hyps || []).filter(h => h.wit);
-    if (own.length) rowsA.push([].concat(...own.map((h, i) => (i ? [['   ']] : []).concat([[htext(h), null, { hyp: h }]]))));
+    // a hypothesis whose board is in the box leaves its place to the expression (a small dashed box)
+    const exprMini = () => this.exprText(this.exprRun(), true);
+    const hypTok = h => St.ws === h.name ? [exprMini(), null, { slot: 'label', ws: h.name }] : [htext(h), null, { hyp: h }];
+    if (own.length) rowsA.push([].concat(...own.map((h, i) => (i ? [['   ']] : []).concat([hypTok(h)]))));
     // a witness from the inverse axiom: its vector and its hypothesis, on a line of their own
-    wits.forEach(h => { const w = h.lhs[h.lhs.length - 1]; rowsA.push([decl([w.el, w.key]), ['   '], [htext(h), null, { hyp: h }]]); });
-    const goal = this.nodeTokens(St.goal);
+    wits.forEach(h => { const w = h.lhs[h.lhs.length - 1]; rowsA.push([decl([w.el, w.key]), ['   '], hypTok(h)]); });
+    const goal = St.ws === 'goal' ? [[exprMini(), null, { slot: 'plain', ws: 'goal' }]] : this.nodeTokens(St.goal);
     const build = (key, title, y, rowsIn) => {
       const on = !!(St.tiles && St.tiles[key]);
       const mk = list => list.map(([t, tile, opt]) => {
         const tw = this.textW(t);
-        if (!tile) return { t: t, w: tw, hyp: opt && opt.hyp ? opt.hyp : null };
+        if (!tile) return { t: t, w: tw, hyp: opt && opt.hyp ? opt.hyp : null, slot: opt && opt.slot ? opt.slot : null, ws: opt && opt.ws ? opt.ws : null };
         let W, html_ = null, padL = 0, fg = '#16130C';
         if (tile.kind === 'decl') {
           // text: ( 𝑣 : 𝑉 ) in a row. Tile: the 𝑣 tile; 𝑣 stays the same size at the tile's element (it only slides
@@ -2058,9 +2242,12 @@ export class Range extends Component {
         return { t: t, w: tw, tile: tile, on: on, width: on ? W : tw, W: W, padL: padL, fg: fg, mini: html_ };
       });
       const rows = rowsIn.map(mk);
-      return { key: key, title: title, y: y, on: on, rows: rows, tokens: [].concat(...rows), toggle: () => this.setState({ tiles: Object.assign({}, this.state.tiles, { [key]: !on }) }) };
+      const toggle = () => this.setState({ tiles: Object.assign({}, this.state.tiles, { [key]: !on }) });
+      // a tap switches the tiles; a double tap on GOAL brings the goal's board into the box (and back)
+      return { key: key, title: title, y: y, on: on, rows: rows, tokens: [].concat(...rows), toggle: toggle,
+        tap: e => { if (e && e.stopPropagation) e.stopPropagation(); this.headTap(key === 'goal' ? (St.ws === 'goal' ? 'expr' : 'goal') : null, toggle); } };
     };
-    return [build('assume', 'ASSUMPTIONS', K.AY, rowsA), build('goal', 'GOAL · ' + (St.level || ''), K.GY, [goal])];
+    return [build('assume', 'ASSUMPTIONS', K.AY, rowsA), build('goal', St.ws === 'goal' ? 'EXPRESSION' : 'GOAL · ' + (St.level || ''), K.GY, [goal])];
   }
   // [text, tile] pairs for a small expression tree (the goal): each scalar and vector gets its tile
   nodeTokens(n) {
@@ -2083,28 +2270,50 @@ export class Range extends Component {
   }
   // The dotted box around the expression: it hugs the expression's tiles (growing and shrinking as they move, so it
   // shows when part of the expression is off screen) and always holds the EXPRESSION heading and the readout under it.
-  zoneBox(readout) {
+  zoneBox(readout, noTiles) {
     const K = this.K;
     const textW = readout ? Math.min(520, 34 + 13.2 * readout.main.length) : 140;
     const box = { l: 14, r: Math.max(28 + 130, 28 + textW) + 16, t: K.ZT, b: K.ZT + (readout ? 34 + (readout.note ? 64 : 46) : 30) + 20 };
-    this.zoneIds.forEach(id => {
+    (noTiles ? [] : this.zoneIds).forEach(id => {
       const p = this.P.get(id); if (!p) return;
       box.l = Math.min(box.l, p.x - 24); box.r = Math.max(box.r, p.x + p.w + 24);
       box.t = Math.min(box.t, p.y - 24); box.b = Math.max(box.b, p.y + p.h + 24);
     });
     return box;
   }
+  // the layer the board's tiles live in: while boards swap it falls away into the distance (toward the box's
+  // middle), stays hidden while they swing, then the new tiles come in from far away
+  wsLayerStyle(A) {
+    const base = 'position: absolute; left: 0; top: 0; width: 0; height: 0; z-index: 6;';
+    if (!A) return base;
+    const o = `transform-origin: ${A.vp.x}px ${A.vp.y}px;`;
+    if (A.phase === 'out') return base + o + ' animation: wsAway 0.34s cubic-bezier(0.5, 0, 0.9, 0.5) both; pointer-events: none';
+    if (A.phase === 'swing') return base + ' opacity: 0; pointer-events: none';
+    return base + o + ' animation: wsCome 0.56s cubic-bezier(0.1, 0.6, 0.3, 1) both';
+  }
+  // a hypothesis's board: the = at the start of its second row
+  eqSign() {
+    if (!this.isHypWs(this.state.ws)) return null;
+    const ids = ((this.zoneSets || []).find(z => z.key === 'zoneR') || { ids: [] }).ids;
+    const ps = ids.map(id => this.P.get(id)).filter(Boolean);
+    const first = ps.sort((a, b) => a.x - b.x)[0];
+    return first ? { x: Math.min(first.x - 50, 30), y: first.y + first.h / 2 - 22 } : { x: 30, y: this.K.ZT + 297 };
+  }
   // One header block (ASSUMPTIONS or GOAL): its title, then its tokens on one line. A token with a tile has a fixed
   // box whose width animates between its text's and its tile's; the tile pops up behind the text after the slide
   // (and shrinks first when switching back).
   headHtml(h, won) {
     const title = h.key === 'goal' && won ? '#F2B33D' : '#94A3B8';
+    const A = this.state.wsAnim; const swing = !!(A && A.phase === 'swing');
     return html`
-    <div onClick=${h.toggle} role="button" aria-pressed=${h.on ? 'true' : 'false'} aria-label=${h.title + ': tap to show or hide the tiles'} style=${`position: absolute; left: 14px; top: ${h.y}px; padding: 0 14px; min-width: 260px; pointer-events: auto; cursor: pointer; z-index: 5`}>
+    <div onClick=${h.tap} role="button" aria-pressed=${h.on ? 'true' : 'false'} aria-label=${h.title + ': tap to show or hide the tiles'} style=${`position: absolute; left: 14px; top: ${h.y}px; padding: 0 14px; min-width: 260px; pointer-events: auto; cursor: pointer; z-index: 5`}>
       <div style=${`font-family: Inter, system-ui, sans-serif; font-size: 14px; font-weight: 700; letter-spacing: 0.12em; color: ${title}`}>${h.title}</div>
-      ${h.rows.map((row, ri) => html`<div style=${`position: relative; height: 58px; margin-top: ${ri ? 0 : 10}px; display: flex; white-space: pre; font-family: 'STIX Two Text', 'Cambria Math', 'Times New Roman', serif; font-size: 24px; color: #E2E8F0`}>
-        ${row.map(k => !k.tile ? html`<span onPointerDown=${k.hyp ? this.hypDown(k.hyp, k.t) : null} style=${k.hyp
-          ? 'flex: 0 0 auto; box-sizing: border-box; margin: 9px 3px 0; height: 40px; line-height: 37px; padding: 0 9px; border: 1.5px solid rgba(125,211,252,0.7); border-radius: 12px; background: rgba(14,116,144,0.22); color: #BAE6FD; cursor: grab; touch-action: none' // a card: it can be dragged
+      ${h.rows.map((row, ri) => html`<div style=${`position: relative; height: 58px; margin-top: ${ri ? 0 : 10}px; display: flex; white-space: pre; font-family: 'STIX Two Text', 'Cambria Math', 'Times New Roman', serif; font-size: 24px; color: #E2E8F0; opacity: ${swing && h.key === 'goal' && (A.from === 'goal' || A.to === 'goal') ? 0 : 1}`}>
+        ${row.map(k => k.slot ? html`<span onPointerDown=${e => e.stopPropagation()} onClick=${e => { e.stopPropagation(); this.headTap('expr', null); }} role="button" aria-label=${'The expression, ' + k.t + ': double-tap to bring it back'}
+            style=${`flex: 0 0 auto; position: relative; box-sizing: border-box; margin: ${k.slot === 'label' ? 4 : 9}px 3px 0; height: ${k.slot === 'label' ? 50 : 40}px; padding: ${k.slot === 'label' ? 14 : 0}px 10px 0; line-height: ${k.slot === 'label' ? 32 : 37}px; border: 2px dashed rgba(148,163,184,0.5); border-radius: 12px; color: #E2E8F0; cursor: pointer; opacity: ${swing ? 0 : 1}; transition: opacity 0.2s ease`}>
+            ${k.slot === 'label' ? html`<span style="position: absolute; left: 9px; top: 3px; line-height: 12px; font-family: Inter, system-ui, sans-serif; font-size: 9px; font-weight: 700; letter-spacing: 0.12em; color: #94A3B8">EXPRESSION</span>` : null}${k.t}</span>`
+          : !k.tile ? html`<span onPointerDown=${k.hyp ? this.hypDown(k.hyp, k.t) : null} onClick=${k.hyp ? (e => { e.stopPropagation(); this.headTap(k.hyp.name, h.toggle); }) : null} style=${k.hyp
+          ? 'flex: 0 0 auto; box-sizing: border-box; margin: 9px 3px 0; height: 40px; line-height: 37px; padding: 0 9px; border: 1.5px solid rgba(125,211,252,0.7); border-radius: 12px; background: rgba(14,116,144,0.22); color: #BAE6FD; cursor: grab; touch-action: none' + (swing && (k.hyp.name === A.from || k.hyp.name === A.to) ? '; opacity: 0' : '') // a card: it can be dragged
           : 'flex: 0 0 auto; padding-top: 14px; height: 30px; line-height: 30px'}>${k.t}</span>` : html`
           <span style=${`position: relative; flex: 0 0 auto; height: 58px; width: ${k.width}px; transition: width 0.35s ease ${k.on ? '0s' : '0.2s'}`}>
             <span style=${`position: absolute; left: 0; top: 0; width: 100%; height: 100%; transform: scale(${k.on ? 1 : 0}); transform-origin: 50% 40%; transition: transform 0.32s cubic-bezier(0.2, 1.5, 0.4, 1) ${k.on ? '0.22s' : '0s'}; pointer-events: none`}>
@@ -2228,19 +2437,21 @@ export class Range extends Component {
       ro.tokens.forEach(k => { const h = k.id != null && hot.has(k.id); const last = segs[segs.length - 1]; if (last && last.hot === h) last.t += k.t; else segs.push({ t: k.t, hot: h }); });
       const red = { bg: 'rgba(248,113,113,0.16)', border: '#F87171', fg: '#FEE2E2' };
       const green = { bg: 'rgba(52,211,153,0.16)', border: '#34D399', fg: '#D1FAE5' };
-      this.zoneValue = ro.ok ? '= ' + this.fmtVal(ro.val) : null; // the old readout, still used by the tests
+      this.zoneValue = ro.ok && ro.val ? '= ' + this.fmtVal(ro.val) : null; // the old readout, still used by the tests
       const main = segs.map(x => x.t).join('');
-      results.push(Object.assign({ x: 28, y: this.K.ZT + 34, main: main, segs: segs, note: ro.ok ? '' : 'terms in the expression need the same type' }, ro.ok ? green : red));
+      results.push(Object.assign({ x: 28, y: this.K.ZT + 34, main: main, segs: segs, note: ro.ok ? '' : ro.eq ? 'both sides need the same type' : 'terms in the expression need the same type' }, ro.ok ? green : red));
     }
-    Object.assign(zb, this.zoneBox(results[0]));
+    // while boards swap, the box hugs only its heading and readout (the tiles are away)
+    const WA = St.wsAnim; const away = !!(WA && (WA.phase === 'out' || WA.phase === 'swing'));
+    Object.assign(zb, this.zoneBox(results[0], away));
+    this._zb = zb;
     // Level complete: the expression is exactly the goal. The expression's tiles hop with a few sparks, the box and
     // the readout turn gold. (What happens next comes later.)
-    const zoneTop = this.zoneIds.length === 1 ? St.tops.find(t => t.node.id === this.zoneIds[0]) : null;
-    const won = !this.props.legacy && !!St.goal && !(this.drag && this.drag.moved) && !!zoneTop && this.canon(zoneTop.node) === this.canon(St.goal);
+    const won = !this.props.legacy && !!St.goal && !(this.drag && this.drag.moved) && !St.wsAnim && this.isWon();
     this._won = won;
     const sparks = [];
     if (won) {
-      const inZone = new Set(this.ids(zoneTop.node)); let k = 0;
+      const inZone = new Set([].concat(...this.zoneIds.map(id => { const t = St.tops.find(u => u.node.id === id); return t ? this.ids(t.node) : []; }))); let k = 0;
       R.vecs.concat(R.hexes).forEach(t => {
         if (!inZone.has(t.id)) return;
         t.anim = 'winHop 0.9s ease-in-out ' + (0.1 * k) + 's 2 both';
@@ -2310,6 +2521,7 @@ export class Range extends Component {
       zoomIn: () => this.zoomAround(this.state.zoom * 1.25), zoomOut: () => this.zoomAround(this.state.zoom / 1.25),
       zoomReset: () => this.setState({ zoom: 1, panX: 0, panY: 0 }), showReset: Math.abs(St.zoom - 1) > 0.01 || St.panX !== 0 || St.panY !== 0, zoomPct: Math.round(St.zoom * 100),
       zoneL: zb.l, zoneW: zb.r - zb.l, zoneT: zb.t, zoneH: zb.b - zb.t,
+      boxTitle: this.props.legacy ? 'EXPRESSION' : this.wsTitle(St.ws), wsAnim: WA || null, eqSign: this.eqSign(),
       ghosts: ghosts, groups: R.groups, pluses: R.pluses,
       vecs: R.vecs.concat(this.props.legacy || zDrag ? [zeroTile] : [], this.draggedItem('vec')), hexes: R.hexes.concat(this.props.legacy || zsDrag ? [zeroHex] : [], poDrag ? [oneHex] : [], this.draggedItem('hex')),
       boxes: R.boxes,
@@ -2341,8 +2553,8 @@ export class Range extends Component {
     <div onPointerDown=${v.panDown} aria-hidden="true" style="position: absolute; left: -4020px; top: -4020px; width: 9000px; height: 9000px; touch-action: none; cursor: grab; background-image: radial-gradient(rgba(148,163,184,0.22) 1.4px, transparent 2px); background-size: 30px 30px"></div>
 
 
-    <div style=${`position: absolute; left: ${v.zoneL}px; top: ${v.zoneT}px; width: ${v.zoneW}px; height: ${v.zoneH}px; box-sizing: border-box; border-radius: 24px; border: 2px dashed rgba(148,163,184,0.28); pointer-events: none; transition: left 0.2s ease, top 0.2s ease, width 0.2s ease, height 0.2s ease; animation: ${v.won ? 'winBox 1.6s ease-out both' : 'none'}`}></div>
-    <div style=${`position: absolute; left: 28px; top: ${v.exprY}px; font-family: Inter, system-ui, sans-serif; font-size: 14px; font-weight: 700; letter-spacing: 0.12em; color: ${v.won ? '#F2B33D' : '#94A3B8'}; pointer-events: none`}>EXPRESSION</div>
+    <div style=${`position: absolute; left: ${v.zoneL}px; top: ${v.zoneT}px; width: ${v.zoneW}px; height: ${v.zoneH}px; box-sizing: border-box; border-radius: 24px; border: 2px dashed rgba(148,163,184,0.28); pointer-events: none; transition: ${v.wsAnim && v.wsAnim.phase === 'in' ? 'left 0.5s ease-out, top 0.5s ease-out, width 0.5s ease-out, height 0.5s ease-out' : 'left 0.2s ease, top 0.2s ease, width 0.2s ease, height 0.2s ease'}; animation: ${v.won ? 'winBox 1.6s ease-out both' : 'none'}`}></div>
+    <div style=${`position: absolute; left: 28px; top: ${v.exprY}px; font-family: Inter, system-ui, sans-serif; font-size: 14px; font-weight: 700; letter-spacing: 0.12em; color: ${v.won ? '#F2B33D' : '#94A3B8'}; pointer-events: none; opacity: ${v.wsAnim && v.wsAnim.phase === 'swing' ? 0 : 1}`}>${v.boxTitle}</div>
     ${(v.heads || []).map(h => this.headHtml(h, v.won))}
     ${v.won ? html`<div role="status" style=${`position: absolute; left: ${v.zoneL + 6}px; top: ${v.zoneT + v.zoneH + 16}px; display: flex; align-items: center; gap: 14px; white-space: nowrap; transform-origin: 20% 50%; animation: trayPop 0.4s cubic-bezier(0.2, 1.5, 0.4, 1) 0.9s both; pointer-events: auto; z-index: 960`}>
       <span style="font-family: Inter, system-ui, sans-serif; font-size: 22px; font-weight: 700; color: #FDE68A">You won!</span>
@@ -2354,6 +2566,8 @@ export class Range extends Component {
     <div style="position: absolute; left: 28px; top: 556px; font-family: Inter, system-ui, sans-serif; font-size: 14px; font-weight: 700; letter-spacing: 0.12em; color: #94A3B8; pointer-events: none">TRAY</div>` : null}
     ${v.legacy ? html`<div style="position: absolute; left: 150px; right: 30px; top: 553px; font-size: 18px; color: #CBD5E1; text-align: right; pointer-events: none">𝑈: the plane 𝑥 − 2𝑦 + 𝑧 = 0 in ℝ³</div>` : null}
 
+    <div class="ws-layer" style=${this.wsLayerStyle(v.wsAnim)}>
+    ${v.eqSign ? html`<div aria-hidden="true" style=${`position: absolute; left: ${v.eqSign.x}px; top: ${v.eqSign.y}px; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; font-size: 40px; color: #E2E8F0; pointer-events: none`}>=</div>` : null}
     ${(v.boxes || []).map(b => html`
       <div onPointerDown=${b.down} aria-label=${b.aria} style=${`position: absolute; left: ${b.x}px; top: ${b.y}px; width: ${b.w}px; height: ${b.h}px; box-sizing: border-box; border-radius: 20px; z-index: ${b.z}; touch-action: none; cursor: grab; animation: ${b.anim};
         border: 2px solid ${b.inv ? '#F2B33D' : 'rgba(148,163,184,0.45)'}; background: ${b.neg ? `linear-gradient(to bottom, rgba(255,255,255,0.03) 50%, ${b.night} 50%)` : 'rgba(255,255,255,0.03)'}`}>
@@ -2403,10 +2617,18 @@ export class Range extends Component {
       </button>
     `)}
 
+    </div>
+    ${(v.wsAnim && v.wsAnim.phase === 'swing' ? v.wsAnim.fly : []).map((f, i) => html`
+      <div key=${'fly' + i} aria-hidden="true" style=${`position: absolute; left: 0; top: 0; z-index: 980; pointer-events: none; --x0: ${f.x0}px; --x1: ${f.x1}px; animation: wsFlyX 0.52s cubic-bezier(0.45, 0, 0.55, 1) both`}>
+        <div style=${`position: absolute; left: 0; top: 0; --y0: ${f.y0}px; --y1: ${f.y1}px; animation: ${i ? 'wsFlyDown' : 'wsFlyUp'} 0.52s cubic-bezier(0.3, 0, 0.3, 1) both; white-space: nowrap`}>
+          <div style="font-family: Inter, system-ui, sans-serif; font-size: 13px; font-weight: 700; letter-spacing: 0.12em; color: #94A3B8">${f.title}</div>
+          <div style="margin-top: 6px; padding: 6px 14px; border-radius: 14px; border: 1.5px dashed rgba(148,163,184,0.6); background: rgba(27,37,58,0.92); color: #E2E8F0; font-size: 22px">${f.text}</div>
+        </div>
+      </div>`)}
     ${v.parenSrc ? html`<button onPointerDown=${v.parenSrc.down} aria-label="Sum space: drag out a pair of brackets" style=${`position: absolute; left: ${v.parenSrc.x}px; top: ${v.parenSrc.y}px; width: 150px; height: 64px; border-radius: 16px; border: 2px dashed rgba(203,213,225,0.55); background: rgba(255,255,255,0.07); color: #E2E8F0; font-size: 30px; touch-action: none; cursor: grab; z-index: ${v.parenSrc.z}; opacity: ${v.parenSrc.op}; pointer-events: ${v.parenSrc.pe}; font-family: inherit`}>( + )</button>` : null}
 
     ${v.results.map((r) => html`
-      <div style=${`position: absolute; left: ${r.x}px; top: ${r.y}px; max-width: 520px; padding: 8px 16px; border-radius: 14px; background: ${r.bg}; border: 1.5px solid ${r.border}; color: ${r.fg}; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; pointer-events: none; z-index: 950`}>
+      <div style=${`opacity: ${v.wsAnim && v.wsAnim.phase === 'swing' ? 0 : 1}; position: absolute; left: ${r.x}px; top: ${r.y}px; max-width: 520px; padding: 8px 16px; border-radius: 14px; background: ${r.bg}; border: 1.5px solid ${r.border}; color: ${r.fg}; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; pointer-events: none; z-index: 950`}>
         <span style="font-size: 24px; font-weight: 600">${r.segs.map(x => x.hot ? html`<span style="animation: readGlow 1.6s ease-in-out infinite">${x.t}</span>` : x.t)}</span>
         <span style="font-family: Inter, system-ui, sans-serif; font-size: 15px; font-weight: 500">${r.note}</span>
       </div>

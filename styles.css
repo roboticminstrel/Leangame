@@ -80,3 +80,27 @@ button { font-family: inherit; }
   0%, 100% { border-color: #CBD5E1; box-shadow: 0 0 0 0 rgba(148,163,184,0); }
   50% { border-color: #94A3B8; box-shadow: 0 0 0 3px rgba(148,163,184,0.28); }
 }
+/* boards swapping: tiles fall away into the distance and come in from it; the two readouts swing past each other */
+@keyframes wsAway {
+  from { scale: 1; opacity: 1; filter: blur(0); }
+  to { scale: 0.02; opacity: 0; filter: blur(3px); }
+}
+@keyframes wsCome {
+  from { scale: 0.02; opacity: 0; filter: blur(3px); }
+  60% { opacity: 1; filter: blur(0); }
+  to { scale: 1; opacity: 1; }
+}
+@keyframes wsFlyX {
+  from { translate: var(--x0) 0; }
+  to { translate: var(--x1) 0; }
+}
+@keyframes wsFlyUp {
+  from { translate: 0 var(--y0); scale: 1; }
+  50% { scale: 1.08; }
+  to { translate: 0 var(--y1); scale: 0.9; }
+}
+@keyframes wsFlyDown {
+  from { translate: 0 var(--y0); scale: 0.9; }
+  50% { scale: 1.08; }
+  to { translate: 0 var(--y1); scale: 1; }
+}
