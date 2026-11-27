@@ -1,0 +1,62 @@
+# The Natural Number Game server, set up the way the Lean machine does it (scripts/nng-server.sh), then played:
+# a level checked through the game server (with the bubblewrap sandbox), and again through the referee's /nng/
+# pass-through (server/referee.py), which is how the site reaches it.
+name: NNG
+
+on:
+  push:
+    paths: ["nng/**", "scripts/nng-server.sh", "server/referee.py", ".github/workflows/nng.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  serve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free disk space (all of Mathlib's compiled files come down)
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL && df -h /
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.elan
+            nng/.lake
+          key: nng-${{ hashFiles('nng/lean-toolchain', 'nng/lake-manifest.json') }}-${{ hashFiles('nng/**/*.lean') }}
+          restore-keys: nng-${{ hashFiles('nng/lean-toolchain', 'nng/lake-manifest.json') }}-
+      - name: Set up (Node, bubblewrap, lean4game, the game)
+        env:
+          LEAN4GAME_DIR: ${{ runner.temp }}/lean4game
+          NNG_STATUS: ${{ runner.temp }}/nng.json
+        run: scripts/nng-server.sh setup && cat "$NNG_STATUS" && du -sh nng/.lake "$LEAN4GAME_DIR"
+      - name: Play a level through the game server
+        env:
+          LEAN4GAME_DIR: ${{ runner.temp }}/lean4game
+          NNG_STATUS: ${{ runner.temp }}/nng.json
+        run: |
+          export PATH="$HOME/.elan/bin:/usr/local/bin:$PATH"
+          scripts/nng-server.sh start > "$RUNNER_TEMP/nng.log" 2>&1 &
+          for i in $(seq 60); do curl -sf http://127.0.0.1:8000/api/config >/dev/null && break; sleep 1; done
+          curl -sf http://127.0.0.1:8000/api/data/leangame/nng/game | head -c 300; echo
+          id=$(curl -sf -X POST http://127.0.0.1:8000/api/lean/start/leangame/nng | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+          echo "instance $id"
+          check() {  # check BASE TACTIC EXPECTED(true|false)  (TOKEN in the environment: sent as X-Lean-Token)
+            out=$(curl -s -X POST -H 'Content-Type: application/json' -H "X-Lean-Token: ${TOKEN:-}" "$1/api/lean/instances/$id/check" \
+              -d "{\"world\":\"Tutorial\",\"level\":1,\"difficulty\":1,\"inventory\":[\"rfl\"],\"tactics\":[\"$2\"]}")
+            got=$(echo "$out" | python3 -c 'import json,sys; print(str(json.load(sys.stdin).get("completed")).lower())' || echo error)
+            echo "$2 -> completed: $got"
+            if [ "$got" != "$3" ]; then echo "$out" | head -c 2000; tail -50 "$RUNNER_TEMP/nng.log"; exit 1; fi
+          }
+          time check http://127.0.0.1:8000 rfl true
+          check http://127.0.0.1:8000 'rw [add_zero]' false
+          # and the way the site reaches it: through the referee, with the token
+          LEAN_TOKEN=t python3 server/referee.py --port 8787 --no-shutdown > "$RUNNER_TEMP/referee.log" 2>&1 &
+          for i in $(seq 20); do curl -sf -H 'X-Lean-Token: t' http://127.0.0.1:8787/health >/dev/null && break; sleep 1; done
+          curl -s -H 'X-Lean-Token: t' http://127.0.0.1:8787/health; echo
+          curl -sf -H 'X-Lean-Token: t' http://127.0.0.1:8787/nng/ | grep -q '<div id="root"\|<html' && echo "client served through the referee"
+          TOKEN=t check http://127.0.0.1:8787/nng rfl true
+      - name: Logs
+        if: always()
+        run: tail -100 "$RUNNER_TEMP/nng.log" || true

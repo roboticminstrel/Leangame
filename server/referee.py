@@ -30,6 +30,8 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -285,6 +287,45 @@ def session(sessions, body):
         return 503, {"ok": False, "error": f"Lean: {e}"}
 
 
+# ---------- the Natural Number Game server (lean4game, scripts/nng-server.sh) on 127.0.0.1:8000 ----------
+# The referee is the machine's only open door: requests under /nng/ (with the token, from the gate) are passed on to
+# the game server, and count as activity for the idle shutdown.
+NNG_PORT = 8000
+NNG_BODY = 1 << 20
+NNG_STATUS = os.environ.get("NNG_STATUS", "/tmp/leangame-nng.json")
+NNG_HEADERS = ("Content-Type", "Accept", "Accept-Language")
+
+
+def nng_state():
+    """How far the game server is: None (not on this machine), building, failed, starting, or ready."""
+    try:
+        with open(NNG_STATUS) as f:
+            st = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if st.get("state") in ("built", "starting"):
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{NNG_PORT}/api/config", timeout=1) as r:
+                if r.status == 200:
+                    return {"state": "ready", "detail": "The Natural Number Game is ready"}
+        except (OSError, ValueError):
+            pass
+    return {"state": st.get("state"), "detail": st.get("detail", "")}
+
+
+def nng_forward(method, path, headers, body):
+    """One request to the game server: (status, headers, body)."""
+    req = urllib.request.Request(f"http://127.0.0.1:{NNG_PORT}{path}", data=body if method not in ("GET", "HEAD") else None,
+                                 method=method, headers={k: headers[k] for k in NNG_HEADERS if headers.get(k)})
+    try:
+        with urllib.request.urlopen(req, timeout=130) as r:  # a proof check may take up to 2 minutes
+            return r.status, dict(r.headers), r.read()
+    except urllib.error.HTTPError as e:
+        return e.code, dict(e.headers), e.read()
+    except OSError as e:
+        return 502, {"Content-Type": "application/json"}, json.dumps({"error": f"the game server isn't answering ({e})"}).encode()
+
+
 def make_handler(state):
     class Handler(BaseHTTPRequestHandler):
         server_version = "leangame-referee"
@@ -307,17 +348,46 @@ def make_handler(state):
             self.reply(401, {"ok": False, "error": "unauthorized"})
             return False
 
+        def nng(self):
+            """Pass a request under /nng/ on to the game server."""
+            n = int(self.headers.get("Content-Length") or 0)
+            if n > NNG_BODY:
+                return self.reply(413, {"ok": False, "error": "too large"})
+            body = self.rfile.read(n) if n else b""
+            state.touch()
+            code, headers, data = nng_forward(self.command, self.path[len("/nng"):] or "/", self.headers, body)
+            self.send_response(code)
+            for k in ("Content-Type", "Cache-Control", "Content-Language", "Last-Modified", "ETag"):
+                v = next((headers[h] for h in headers if h.lower() == k.lower()), None)
+                if v:
+                    self.send_header(k, v)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def do_DELETE(self):
+            if not self.authorized():
+                return
+            if self.path.startswith("/nng/"):
+                return self.nng()
+            self.reply(404, {"ok": False, "error": "not found"})
+
         def do_GET(self):
             if not self.authorized():
                 return
+            if self.path.startswith("/nng/"):
+                return self.nng()
             if self.path == "/health":
                 return self.reply(200, {"ok": True, "ready": state.repl.ready, "error": state.repl.error,
-                                        "idle_seconds": round(state.idle()), "idle_limit": state.idle_seconds})
+                                        "idle_seconds": round(state.idle()), "idle_limit": state.idle_seconds,
+                                        "nng": nng_state()})
             self.reply(404, {"ok": False, "error": "not found"})
 
         def do_POST(self):
             if not self.authorized():
                 return
+            if self.path.startswith("/nng/"):
+                return self.nng()
             n = int(self.headers.get("Content-Length") or 0)
             if n > MAX_BODY:
                 return self.reply(413, {"ok": False, "error": "too large"})
