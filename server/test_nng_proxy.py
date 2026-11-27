@@ -74,6 +74,13 @@ class Proxy(unittest.TestCase):
         with open(f.name, "w") as g:
             g.write(json.dumps({"state": "starting", "detail": ""}))
         self.assertEqual(self.call("GET", "/health")[2]["nng"]["state"], "ready", "the server answers: ready")
+        with open(f.name, "w") as g:
+            g.write(json.dumps({"state": "failed", "detail": "The Natural Number Game did not build"}))
+        with open(f.name + ".why", "w") as g:
+            g.write(json.dumps({"step": "building lean4game", "tail": ["npm ERR! code ENOMEM"]}))
+        self.assertEqual(self.call("GET", "/health")[2]["nng"],
+                         {"state": "failed", "detail": "Setup failed at: building lean4game. npm ERR! code ENOMEM"})
+        os.unlink(f.name + ".why")
         os.unlink(f.name)
         self.assertIsNone(self.call("GET", "/health")[2]["nng"])
 

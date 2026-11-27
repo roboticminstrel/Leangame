@@ -310,7 +310,16 @@ def nng_state():
                     return {"state": "ready", "detail": "The Natural Number Game is ready"}
         except (OSError, ValueError):
             pass
-    return {"state": st.get("state"), "detail": st.get("detail", "")}
+    detail = st.get("detail", "")
+    if st.get("state") == "failed":
+        # the setup script's own account of what failed (scripts/nng-server.sh, NNG_STATUS.why)
+        try:
+            with open(NNG_STATUS + ".why") as f:
+                why = json.load(f)
+            detail = f"Setup failed at: {why.get('step')}. " + " / ".join(why.get("tail") or [])[-400:]
+        except (OSError, ValueError):
+            pass
+    return {"state": st.get("state"), "detail": detail}
 
 
 def nng_forward(method, path, headers, body):
