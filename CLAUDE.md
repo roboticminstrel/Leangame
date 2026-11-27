@@ -10,6 +10,8 @@ The Range started as one tab of a larger design-canvas prototype: a chapter 1–
 
 ## Visual and interaction spec (agreed with James; keep it)
 
+- **First screen** (`src/Home.js`): every visit or reload starts at "Choose a game": **Natural Number Game** or **Linear Algebra** (the Range). For now the Natural Number Game is the hosted Lean 4 version (leanprover-community/NNG4 on the lean4game server, `NNG_URL` = adam.math.hhu.de) in a full-height frame, with "‹ Games" and "Open in a new tab" (in case the host refuses to be framed); James will adapt it toward his own approach later. Self-hosting it needs the lean4game server (see the pinned "always-on server" idea below).
+
 - **Scalar**: a gold hexagon. The type band (ℝ/ℂ) is on top and the element is below.
 - **Vector**: a blue arrow with a type band (𝑉, 𝑈 ⊂ ℝ³) and the element. Its left **field edge** (gold band plus cream body) shows a sunken 𝐅 when abstract, or a raised ℝ/ℂ parallelogram strip. Holding the strip removes it. A docked scalar fully covers the edge.
 - **Negative tiles are night tiles**: the top band stays, the face goes dark in its type's tint (scalars `#3B2C12`, vectors `#182654`), and the minus is always written (`−1`, `−𝑣`). A vector's 𝐅 edge stays in day colours. Scalars are negative by value; a vector is `neg: true` (the additive inverse −𝑣, distinct from `(−1)𝑣`). `isNeg`, `look`, `elText`; mockup at `src/mock/tiles.html`.
@@ -138,6 +140,8 @@ Leangame is hosted the same way as James's other project, Interlinea (`roboticmi
 - Commit messages end with a `Co-Authored-By:` line naming the model, and PR bodies end with a Claude Code attribution line.
 
 ## Ideas discussed but not built
+
+- **Always-on Lean server outside AWS** (pinned by James as a maybe, 2026-11-27): a Hetzner CX23 (x86, 2 vCPU, 4 GB, ~€6/mo with IPv4; EU only) instead of launching EC2 per session; the gate would forward to a fixed host (or CloudFront straight to it with HTTPS + token). It could also host lean4game for the Natural Number Game.
 
 - Lean REPL server, "referee vs engine": start as a referee that checks each move through REPL `proofState`. Candidates were a small EC2 CPU instance or Lambda (cold starts with Mathlib are heavy).
 - Lean-style statements for linear independence (Mathlib `LinearIndependent`, `Fintype.linearIndependent_iff`) and concrete vector space examples as future levels.
