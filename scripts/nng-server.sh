@@ -55,7 +55,8 @@ add_swap() {
   [ "$(awk '/MemTotal/ {print $2}' /proc/meminfo)" -lt 6000000 ] || return 0
   [ "$(awk 'NR > 1' /proc/swaps | wc -l)" -eq 0 ] || return 0
   STEP="adding swap"
-  fallocate -l 4G /swapfile && chmod 600 /swapfile && mkswap -q /swapfile && swapon /swapfile && echo "swap on: 4 GB"
+  rm -f /swapfile
+  fallocate -l 4G /swapfile && chmod 600 /swapfile && mkswap /swapfile >/dev/null && swapon /swapfile && echo "swap on: 4 GB"
 }
 
 node_ok() { command -v node >/dev/null && [ "$(node -p 'process.versions.node.split(".")[0]')" -ge "$NODE_MAJOR" ]; }
@@ -134,7 +135,7 @@ case "${1:-}" in
     trap failed ERR
     set -E
     say building "Setting up the Natural Number Game"
-    add_swap
+    add_swap || echo "== no swap (going on without it)"   # helpful, not needed: never the reason setup stops
     if ! command -v elan >/dev/null; then
       curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -o /tmp/elan-init.sh
       sh /tmp/elan-init.sh -y --default-toolchain none
